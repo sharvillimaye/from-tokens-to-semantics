@@ -13,5 +13,5 @@
 
 ## Checklist
 
-- [ ] I’ve run `ruff .` and `pytest` locally  
+- [ ] I’ve run `make lint` and `make test` locally  
 - [ ] I’ve updated README and CHANGELOG as needed  
