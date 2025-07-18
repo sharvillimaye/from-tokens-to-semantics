@@ -1,0 +1,6 @@
+torch>=2.0.0
+numpy>=1.21.0
+scikit-learn>=1.0.0
+datasets>=2.0.0
+transformer-lens>=1.4.0
+pathlib 
