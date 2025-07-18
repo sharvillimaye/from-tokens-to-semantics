@@ -4,7 +4,7 @@
 2. Streams WikiText‑2 test split through the model
 3. Collects up to N high‑activation examples for a target neuron
 4. Clusters the embeddings with HAC + cosine distance
-5. Prints simple polysemanticity metrics
+5. Prints polysemanticity metrics
 """
 
 import argparse
