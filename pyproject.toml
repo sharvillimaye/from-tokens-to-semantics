@@ -16,6 +16,18 @@ classifiers = [
     "License :: OSI Approved :: MIT License"
 ]
 requires-python = "~=3.11.0"
+dependencies = [
+    "matplotlib>=3.10.3",
+    "nnsight>=0.4.11",
+    "numpy>=2.3.2",
+    "pandas>=2.3.1",
+    "scipy>=1.16.1",
+    "seaborn>=0.13.2",
+    "torch>=2.7.1",
+    "tqdm>=4.67.1",
+    "transformer-lens>=2.15.4",
+    "transformers>=4.54.0",
+]
 
 
 [tool.ruff]
