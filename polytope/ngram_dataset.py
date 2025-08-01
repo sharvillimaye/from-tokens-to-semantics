@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-Improved N-gram Dataset Builder for Polytope Analysis
-Robust implementation for analyzing n-gram frequency patterns and activation evolution
+Optimized N-gram Dataset Builder - Much Faster Version
 """
 
 import torch
 import numpy as np
 import pandas as pd
 from collections import defaultdict, Counter
-from typing import Dict, List, Tuple, Any, Optional, Generator
+from typing import Dict, List, Tuple, Any, Optional
 import matplotlib.pyplot as plt
-import seaborn as sns
 import pickle
 import re
 import json
@@ -22,515 +20,368 @@ from datasets import Dataset, load_dataset
 import transformers
 from transformers import AutoTokenizer
 from pathlib import Path
+import concurrent.futures
+import threading
 
+# Reduced frequency bins for faster processing
+FREQUENCY_BINS = {
+    'high': {'range': (1000, float('inf')), 'target_count': 200, 'description': 'Common phrases'},
+    'medium': {'range': (100, 1000), 'target_count': 300, 'description': 'Uncommon phrases'},
+    'low': {'range': (10, 100), 'target_count': 200, 'description': 'Rare phrases'},
+    'very_low': {'range': (1, 10), 'target_count': 100, 'description': 'Very rare phrases'}
+}
 
-class ImprovedNGramDatasetBuilder:
-    """Enhanced N-gram dataset builder with robust frequency binning and text processing"""
-    
-    def __init__(self, 
-                 api_base_url: str = 'https://api.infini-gram.io/',
-                 cache_dir: str = "./ngram_cache",
-                 max_samples: int = 10000):
-        self.api_base_url = api_base_url
+class OptimizedNgramBuilder:
+    def __init__(self, cache_dir: str = "./ngram_cache", max_workers: int = 5):
         self.cache_dir = Path(cache_dir)
-        self.max_samples = max_samples
-        self.rate_limit_delay = 0.1
-        
-        # Create cache directory
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.frequency_cache = self.load_frequency_cache()
+        self.max_workers = max_workers
+        self.rate_limit_delay = 0.05  # Reduced delay
+        self.api_base_url = 'https://api.infini-gram.io/'
+        self.session = requests.Session()  # Reuse connections
         
-        # Frequency bins for stratification
-        self.frequency_bins = {
-            'very_high': {'range': (100000, float('inf')), 'target_count': 500, 'description': 'Extremely common phrases'},
-            'high': {'range': (10000, 100000), 'target_count': 1000, 'description': 'Very common phrases'},
-            'medium': {'range': (1000, 10000), 'target_count': 1500, 'description': 'Common phrases'},
-            'low': {'range': (100, 1000), 'target_count': 1000, 'description': 'Uncommon phrases'},
-            'rare': {'range': (10, 100), 'target_count': 500, 'description': 'Rare phrases'},
-            'very_rare': {'range': (1, 10), 'target_count': 300, 'description': 'Very rare phrases'}
-        }
-        
-        # Initialize frequency cache
-        self.frequency_cache = self._load_frequency_cache()
-    
-    def _load_frequency_cache(self) -> Dict[str, int]:
+    def load_frequency_cache(self) -> Dict[str, int]:
         """Load cached frequency data"""
         cache_file = self.cache_dir / "frequency_cache.json"
         if cache_file.exists():
             with open(cache_file, 'r') as f:
                 return json.load(f)
         return {}
-    
-    def _save_frequency_cache(self):
+
+    def save_frequency_cache(self):
         """Save frequency cache to disk"""
         cache_file = self.cache_dir / "frequency_cache.json"
         with open(cache_file, 'w') as f:
             json.dump(self.frequency_cache, f)
-    
-    def query_infinigram_frequency(self, ngram: str, corpus: str = "pile") -> int:
-        """Query Infinigram API with caching and error handling"""
+
+    def query_infinigram_batch(self, ngrams: List[str], corpus: str = "pile") -> Dict[str, int]:
+        """Query multiple n-grams with threading for better performance"""
+        results = {}
+        lock = threading.Lock()
         
-        # Check cache first
-        cache_key = f"{ngram}_{corpus}"
-        if cache_key in self.frequency_cache:
-            return self.frequency_cache[cache_key]
+        def query_single(ngram: str):
+            cache_key = f"{ngram}_{corpus}"
+            
+            # Check cache first
+            with lock:
+                if cache_key in self.frequency_cache:
+                    results[ngram] = self.frequency_cache[cache_key]
+                    return
+            
+            try:
+                payload = {
+                    'index': 'v4_piletrain_llama',
+                    'query_type': 'count',
+                    'query': ngram
+                }
+                
+                response = self.session.post(self.api_base_url, json=payload, timeout=5)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    frequency = result.get('count', 0)
+                    
+                    with lock:
+                        self.frequency_cache[cache_key] = frequency
+                        results[ngram] = frequency
+                else:
+                    print(f"API error for '{ngram}': {response.status_code}")
+                    with lock:
+                        results[ngram] = 0
+                        
+            except Exception as e:
+                print(f"Error querying '{ngram}': {e}")
+                with lock:
+                    results[ngram] = 0
+            
+            # Rate limiting
+            time.sleep(self.rate_limit_delay)
+        
+        # Use ThreadPoolExecutor for concurrent requests
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = [executor.submit(query_single, ngram) for ngram in ngrams]
+            concurrent.futures.wait(futures)
+        
+        return results
+
+    def extract_ngrams_from_text(self, text: str, n_gram_size: int) -> List[str]:
+        """Extract n-grams from text - optimized version"""
+        # More aggressive text cleaning
+        text = re.sub(r'[^\w\s]', ' ', text.lower())  # Remove punctuation, lowercase
+        text = re.sub(r'\s+', ' ', text.strip())
+        words = text.split()
+        
+        if len(words) < n_gram_size:
+            return []
+        
+        # Use list comprehension for speed
+        return [' '.join(words[i:i + n_gram_size]) for i in range(len(words) - n_gram_size + 1)]
+
+    def load_pile_dataset_fast(self, num_samples: int = 1000) -> List[str]:
+        """Load samples from The Pile dataset - faster version"""
+        print(f"Loading {num_samples} samples from The Pile...")
         
         try:
-            # Infinigram API call
-            payload = {
-                'index': 'v4_piletrain_llama',
-                'query_type': 'count',
-                'query': ngram
-            }
+            dataset = load_dataset("EleutherAI/pile", split="train", streaming=True)
             
-            response = requests.post(self.api_base_url, json=payload, timeout=10)
-            
-            if response.status_code == 200:
-                result = response.json()
-                frequency = result.get('count', 0)
+            texts = []
+            for i, sample in enumerate(dataset):
+                if i >= num_samples:
+                    break
                 
-                # Cache the result
-                self.frequency_cache[cache_key] = frequency
-                
-                # Rate limiting
-                time.sleep(self.rate_limit_delay)
-                return frequency
-            else:
-                print(f"API error for '{ngram}': {response.status_code}")
-                return 0
-                
-        except Exception as e:
-            print(f"Error querying frequency for '{ngram}': {e}")
-            return 0
-    
-    def extract_ngrams_robust(self, text: str, n: int = 2, min_length: int = 2) -> List[Dict[str, Any]]:
-        """Extract n-grams with position information and cleaning"""
-        
-        # Clean text while preserving positions
-        cleaned_text = re.sub(r'\s+', ' ', text.strip())
-        
-        # Tokenize preserving positions
-        words_with_positions = []
-        for match in re.finditer(r'\b\w+\b', cleaned_text):
-            words_with_positions.append({
-                'word': match.group().lower(),
-                'start': match.start(),
-                'end': match.end()
-            })
-        
-        ngrams_info = []
-        
-        # Extract n-grams with position tracking
-        for i in range(len(words_with_positions) - n + 1):
-            ngram_words = words_with_positions[i:i+n]
-            ngram_text = ' '.join([w['word'] for w in ngram_words])
-            
-            # Skip if any word is too short
-            if any(len(w['word']) < min_length for w in ngram_words):
-                continue
-            
-            # Calculate character positions
-            char_start = ngram_words[0]['start']
-            char_end = ngram_words[-1]['end']
-            
-            ngrams_info.append({
-                'ngram': ngram_text,
-                'char_start': char_start,
-                'char_end': char_end,
-                'words': [w['word'] for w in ngram_words],
-                'word_positions': [(w['start'], w['end']) for w in ngram_words]
-            })
-        
-        return ngrams_info
-    
-    def load_pile_dataset_robust(self, max_samples: int = None) -> Generator[str, None, None]:
-        """Robust dataset loading with multiple fallback strategies"""
-        
-        if max_samples is None:
-            max_samples = self.max_samples
-        
-        dataset_strategies = [
-            # Strategy 1: Direct Pile loading
-            {
-                'name': 'EleutherAI/pile',
-                'config': 'all',
-                'split': 'train'
-            },
-            # Strategy 2: Alternative Pile dataset
-            {
-                'name': 'monology/pile-uncopyrighted',
-                'config': None,
-                'split': 'train'
-            },
-            # Strategy 3: C4 dataset as fallback
-            {
-                'name': 'c4',
-                'config': 'en',
-                'split': 'train'
-            }
-        ]
-        
-        for strategy in dataset_strategies:
-            try:
-                print(f"Attempting to load {strategy['name']}...")
-                
-                if strategy['config']:
-                    dataset = load_dataset(
-                        strategy['name'], 
-                        strategy['config'], 
-                        split=strategy['split'], 
-                        streaming=True
-                    )
-                else:
-                    dataset = load_dataset(
-                        strategy['name'], 
-                        split=strategy['split'], 
-                        streaming=True
-                    )
-                
-                count = 0
-                for item in dataset:
-                    if count >= max_samples:
-                        break
+                text = sample.get('text', '')
+                if 50 < len(text.strip()) < 2000:  # Filter very short/long texts
+                    texts.append(text.strip())
                     
-                    text = item.get('text', '')
-                    if len(text) > 200:  # Filter short texts
-                        yield text
-                        count += 1
-                
-                print(f"Successfully loaded {count} texts from {strategy['name']}")
-                return
-                
-            except Exception as e:
-                print(f"Failed to load {strategy['name']}: {e}")
-                continue
-        
-        # Ultimate fallback
-        print("All dataset loading failed, using synthetic data...")
-        yield from self._generate_synthetic_texts(max_samples)
-    
-    def _generate_synthetic_texts(self, max_samples: int) -> Generator[str, None, None]:
-        """Generate synthetic texts for testing when datasets fail"""
-        
+                if i % 100 == 0:
+                    print(f"Loaded {len(texts)} valid texts from {i+1} samples")
+            
+            print(f"Final: {len(texts)} valid text samples from {num_samples} total")
+            return texts
+            
+        except Exception as e:
+            print(f"Error loading dataset: {e}")
+            return self.generate_dummy_texts(num_samples)
+
+    def generate_dummy_texts(self, num_samples: int = 100) -> List[str]:
+        """Generate dummy texts for testing"""
         templates = [
-            "Machine learning algorithms are transforming the way we analyze data in various industries.",
-            "Climate change represents one of the most significant challenges facing humanity today.",
-            "The rapid development of artificial intelligence has profound implications for society.",
-            "Data science combines statistical analysis with computational methods to extract insights.",
-            "Neural networks can learn complex patterns from large datasets through training processes.",
-            "Natural language processing enables computers to understand and generate human language.",
-            "Deep learning models have achieved remarkable success in computer vision tasks.",
-            "The internet of things connects everyday devices to create smart environments.",
-            "Quantum computing promises to solve certain problems exponentially faster than classical computers.",
-            "Biotechnology advances are revolutionizing medicine and pharmaceutical research."
+            "The {adj} {noun} {verb} quickly in the {place}.",
+            "Machine learning {verb} {adj} patterns in {noun} data.",
+            "When {noun} {verb}, the {adj} system becomes {adj2}.",
+            "The {adj} algorithm {verb} {noun} with {adj2} accuracy.",
+            "Deep learning {verb} {adj} features from {noun} datasets."
         ]
         
-        for i in range(max_samples):
-            # Create variations by combining templates
-            base_text = random.choice(templates)
-            variation = base_text.replace("the", "a").replace("are", "have been")
-            yield variation
-    
-    def build_stratified_ngram_dataset(self, 
-                                     n_gram_size: int = 2,
-                                     pile_samples: int = 5000,
-                                     min_word_length: int = 2) -> Dict[str, Any]:
-        """Build stratified n-gram dataset with improved frequency analysis"""
-        
-        print(f"Building stratified {n_gram_size}-gram dataset...")
-        print(f"Target samples: {pile_samples}")
-        
-        # Step 1: Collect n-grams from corpus
-        ngram_frequency_map = defaultdict(int)
-        ngram_text_mapping = defaultdict(list)  # Track source texts
-        
-        print("Extracting n-grams from corpus...")
-        text_count = 0
-        
-        for text in tqdm(self.load_pile_dataset_robust(pile_samples), desc="Processing texts"):
-            ngrams_info = self.extract_ngrams_robust(text, n_gram_size, min_word_length)
-            
-            # Sample n-grams to manage memory
-            sampled_ngrams = random.sample(ngrams_info, min(30, len(ngrams_info)))
-            
-            for ngram_info in sampled_ngrams:
-                ngram = ngram_info['ngram']
-                ngram_frequency_map[ngram] += 1
-                ngram_text_mapping[ngram].append({
-                    'text_id': text_count,
-                    'text': text,
-                    'char_start': ngram_info['char_start'],
-                    'char_end': ngram_info['char_end'],
-                    'words': ngram_info['words']
-                })
-            
-            text_count += 1
-            
-            # Progress reporting
-            if text_count % 1000 == 0:
-                print(f"Processed {text_count} texts, found {len(ngram_frequency_map)} unique n-grams")
-        
-        print(f"Extracted {len(ngram_frequency_map)} unique {n_gram_size}-grams from {text_count} texts")
-        
-        # Step 2: Stratify by frequency and get global frequencies
-        stratified_dataset = self._stratify_and_validate_ngrams(
-            ngram_frequency_map, 
-            ngram_text_mapping,
-            max_api_calls=1000  # Limit API calls
-        )
-        
-        # Step 3: Create final dataset structure
-        final_dataset = self._create_final_dataset_structure(stratified_dataset)
-        
-        # Save frequency cache
-        self._save_frequency_cache()
-        
-        return final_dataset
-    
-    def _stratify_and_validate_ngrams(self, 
-                                    local_freq_map: Dict[str, int],
-                                    text_mapping: Dict[str, List[Dict]],
-                                    max_api_calls: int = 1000) -> Dict[str, Any]:
-        """Stratify n-grams by frequency with API validation"""
-        
-        # Sort by local frequency
-        sorted_ngrams = sorted(local_freq_map.items(), key=lambda x: x[1], reverse=True)
-        
-        stratified_data = {
-            bin_name: {
-                'ngrams': [],
-                'local_frequencies': [],
-                'global_frequencies': [],
-                'text_examples': [],
-                'confidence_scores': []
-            } for bin_name in self.frequency_bins.keys()
+        words = {
+            'adj': ["advanced", "complex", "efficient", "robust", "scalable", "optimal"],
+            'adj2': ["better", "faster", "stronger", "smarter", "cleaner", "simpler"],
+            'noun': ["model", "system", "network", "algorithm", "data", "method"],
+            'verb': ["processes", "analyzes", "computes", "learns", "predicts", "optimizes"],
+            'place': ["cloud", "server", "database", "memory", "cache", "pipeline"]
         }
         
-        api_call_count = 0
+        texts = []
+        for _ in range(num_samples):
+            template = random.choice(templates)
+            text = template.format(**{k: random.choice(v) for k, v in words.items()})
+            texts.append(text)
         
-        print("Stratifying n-grams and querying global frequencies...")
+        return texts
+
+    def count_ngrams_fast(self, texts: List[str], n_gram_size: int) -> Tuple[Counter, Dict[str, List[str]]]:
+        """Fast n-gram counting with filtering"""
+        ngram_counts = Counter()
+        ngram_text_mapping = defaultdict(list)
         
-        for ngram, local_freq in tqdm(sorted_ngrams[:5000], desc="Processing n-grams"):
+        print(f"Extracting {n_gram_size}-grams from {len(texts)} texts...")
+        
+        for text in tqdm(texts, desc="Processing texts"):
+            ngrams = self.extract_ngrams_from_text(text, n_gram_size)
             
-            # Get global frequency (with API limiting)
-            if api_call_count < max_api_calls:
-                global_freq = self.query_infinigram_frequency(ngram)
-                api_call_count += 1
-            else:
-                # Estimate based on local frequency for remaining items
-                global_freq = self._estimate_global_frequency(local_freq)
+            for ngram in ngrams:
+                # Basic quality filtering
+                words = ngram.split()
+                if (len(words) == n_gram_size and 
+                    all(len(word) >= 2 for word in words) and
+                    not any(word.isdigit() for word in words)):
+                    
+                    ngram_counts[ngram] += 1
+                    if len(ngram_text_mapping[ngram]) < 3:  # Limit examples
+                        ngram_text_mapping[ngram].append(text[:200])  # Truncate text
+        
+        print(f"Found {len(ngram_counts)} unique n-grams")
+        return ngram_counts, dict(ngram_text_mapping)
+
+    def smart_stratify_ngrams(self, ngram_counts: Counter, text_mapping: Dict[str, List[str]], 
+                             max_api_calls: int = 500) -> Dict[str, Dict[str, List]]:
+        """Smart stratification with selective API calls"""
+        
+        # Pre-filter n-grams: only query promising candidates
+        sorted_ngrams = ngram_counts.most_common()
+        
+        # Smart selection: query high-frequency local n-grams first (more likely to have global data)
+        candidates_to_query = []
+        for ngram, local_freq in sorted_ngrams:
+            if (local_freq >= 3 and  # Must appear multiple times locally
+                len(candidates_to_query) < max_api_calls):
+                candidates_to_query.append(ngram)
+        
+        print(f"Querying {len(candidates_to_query)} selected n-grams (out of {len(sorted_ngrams)} total)")
+        
+        # Batch query in chunks
+        chunk_size = 50
+        global_frequencies = {}
+        
+        for i in range(0, len(candidates_to_query), chunk_size):
+            chunk = candidates_to_query[i:i + chunk_size]
+            print(f"Processing batch {i//chunk_size + 1}/{(len(candidates_to_query)-1)//chunk_size + 1}")
             
-            # Categorize based on global frequency (or estimate)
-            category = self._categorize_by_frequency(global_freq or local_freq)
+            chunk_results = self.query_infinigram_batch(chunk)
+            global_frequencies.update(chunk_results)
             
-            # Check if we need more samples in this category
-            if len(stratified_data[category]['ngrams']) < self.frequency_bins[category]['target_count']:
-                
-                # Calculate confidence score
-                confidence = self._calculate_confidence_score(ngram, local_freq, global_freq)
+            # Save cache periodically
+            if i % (chunk_size * 5) == 0:
+                self.save_frequency_cache()
+        
+        # Initialize stratified data
+        stratified_data = {
+            bin_name: {
+                'ngrams': [], 'local_frequencies': [], 'global_frequencies': [],
+                'text_examples': [], 'confidence_scores': []
+            } for bin_name in FREQUENCY_BINS.keys()
+        }
+        
+        # Categorize all n-grams (queried + estimated)
+        for ngram, local_freq in sorted_ngrams:
+            global_freq = global_frequencies.get(ngram)
+            
+            # If no global data, estimate based on local frequency
+            if global_freq is None:
+                global_freq = max(1, int(local_freq * random.uniform(50, 200)))  # Rough estimate
+            
+            # Categorize
+            category = self.categorize_by_frequency(global_freq)
+            
+            # Add to appropriate bin if there's space
+            if len(stratified_data[category]['ngrams']) < FREQUENCY_BINS[category]['target_count']:
+                confidence = self.calculate_confidence_score(ngram, local_freq, 
+                                                           global_frequencies.get(ngram))
                 
                 stratified_data[category]['ngrams'].append(ngram)
                 stratified_data[category]['local_frequencies'].append(local_freq)
-                stratified_data[category]['global_frequencies'].append(global_freq or -1)
-                stratified_data[category]['text_examples'].append(text_mapping[ngram][:3])  # First 3 examples
+                stratified_data[category]['global_frequencies'].append(global_freq)
+                stratified_data[category]['text_examples'].append(text_mapping.get(ngram, [])[:2])
                 stratified_data[category]['confidence_scores'].append(confidence)
         
-        print(f"Made {api_call_count} API calls")
+        self.save_frequency_cache()
         return stratified_data
-    
-    def _estimate_global_frequency(self, local_freq: int) -> int:
-        """Estimate global frequency based on local frequency"""
-        # Simple heuristic: assume local corpus is ~0.1% of global corpus
-        return int(local_freq * 1000)
-    
-    def _categorize_by_frequency(self, frequency: int) -> str:
+
+    def categorize_by_frequency(self, frequency: int) -> str:
         """Categorize n-gram by frequency"""
-        for category, info in self.frequency_bins.items():
+        for category, info in FREQUENCY_BINS.items():
             min_freq, max_freq = info['range']
             if min_freq <= frequency < max_freq:
                 return category
-        return 'very_rare'  # Default
-    
-    def _calculate_confidence_score(self, ngram: str, local_freq: int, global_freq: Optional[int]) -> float:
-        """Calculate confidence score for n-gram quality"""
+        return 'very_low'
+
+    def calculate_confidence_score(self, ngram: str, local_freq: int, global_freq: Optional[int]) -> float:
+        """Calculate confidence score"""
+        confidence = 0.8  # Base confidence
         
-        confidence = 1.0
-        
-        # Penalize very short n-grams
+        # Boost for longer average word length
         avg_word_length = np.mean([len(word) for word in ngram.split()])
-        if avg_word_length < 3:
-            confidence *= 0.8
+        if avg_word_length >= 4:
+            confidence += 0.1
         
-        # Penalize single character words
-        if any(len(word) == 1 for word in ngram.split()):
-            confidence *= 0.6
+        # Boost if we have real global frequency data
+        if global_freq is not None:
+            confidence += 0.1
         
-        # Boost if we have global frequency data
-        if global_freq is not None and global_freq > 0:
-            confidence *= 1.2
-        
-        # Boost based on local frequency (indicates robustness)
+        # Boost for higher local frequency
         if local_freq >= 5:
-            confidence *= 1.1
+            confidence += 0.05
         
         return min(confidence, 1.0)
-    
-    def _create_final_dataset_structure(self, stratified_data: Dict) -> Dict[str, Any]:
-        """Create final dataset with organized structure"""
+
+    def build_fast_dataset(self, n_gram_size: int = 2, pile_samples: int = 1000, 
+                          max_api_calls: int = 300) -> Dict[str, Any]:
+        """Build dataset with optimizations for speed"""
+        
+        print(f"🚀 Building FAST {n_gram_size}-gram dataset with {pile_samples} samples")
+        start_time = time.time()
+        
+        # Step 1: Load texts (reduced samples for speed)
+        texts = self.load_pile_dataset_fast(pile_samples)
+        
+        # Step 2: Extract and count n-grams
+        ngram_counts, text_mapping = self.count_ngrams_fast(texts, n_gram_size)
+        
+        # Step 3: Smart stratification with limited API calls
+        stratified_data = self.smart_stratify_ngrams(ngram_counts, text_mapping, max_api_calls)
+        
+        # Step 4: Create final dataset
+        final_dataset = self.create_final_dataset(stratified_data, n_gram_size, pile_samples)
+        
+        elapsed_time = time.time() - start_time
+        print(f"✅ Dataset built in {elapsed_time:.1f} seconds!")
+        
+        return final_dataset
+
+    def create_final_dataset(self, stratified_data: Dict, n_gram_size: int, pile_samples: int) -> Dict[str, Any]:
+        """Create final dataset structure"""
         
         final_dataset = {
-            'texts': [],
-            'ngrams': [],
-            'categories': [],
-            'local_frequencies': [],
-            'global_frequencies': [],
-            'positions': [],
-            'char_start': [],
-            'char_end': [],
-            'confidence_scores': [],
-            'metadata': []
+            'texts': [], 'ngrams': [], 'categories': [],
+            'local_frequencies': [], 'global_frequencies': [],
+            'confidence_scores': [], 'metadata': []
         }
         
-        total_samples = 0
-        
         for category, data in stratified_data.items():
-            print(f"Processing category '{category}': {len(data['ngrams'])} n-grams")
-            
             for i, (ngram, local_freq, global_freq, text_examples, confidence) in enumerate(zip(
-                data['ngrams'], 
-                data['local_frequencies'], 
-                data['global_frequencies'],
-                data['text_examples'],
-                data['confidence_scores']
+                data['ngrams'], data['local_frequencies'], data['global_frequencies'],
+                data['text_examples'], data['confidence_scores']
             )):
-                
-                # Use the first example text
-                if text_examples:
-                    example = text_examples[0]
-                    text = example['text']
-                    
-                    final_dataset['texts'].append(text)
+                for text_example in text_examples[:1]:  # Just 1 example per n-gram for speed
+                    final_dataset['texts'].append(text_example)
                     final_dataset['ngrams'].append(ngram)
                     final_dataset['categories'].append(category)
                     final_dataset['local_frequencies'].append(local_freq)
                     final_dataset['global_frequencies'].append(global_freq)
-                    final_dataset['positions'].append(example['char_start'])
-                    final_dataset['char_start'].append(example['char_start'])
-                    final_dataset['char_end'].append(example['char_end'])
                     final_dataset['confidence_scores'].append(confidence)
-                    final_dataset['metadata'].append({
-                        'text_length': len(text),
-                        'ngram_word_count': len(ngram.split()),
-                        'words': example['words'],
-                        'category_description': self.frequency_bins[category]['description'],
-                        'frequency_range': self.frequency_bins[category]['range']
-                    })
-                    
-                    total_samples += 1
+                    final_dataset['metadata'].append({'category': category, 'rank': i})
         
-        print(f"Created final dataset with {total_samples} samples")
+        final_dataset['dataset_metadata'] = {
+            'n_gram_size': n_gram_size,
+            'pile_samples': pile_samples,
+            'total_samples': len(final_dataset['texts']),
+            'creation_timestamp': time.time(),
+            'frequency_bins': FREQUENCY_BINS
+        }
+        
         return final_dataset
+
+
+# Convenience functions
+def build_fast_ngram_dataset(n_gram_size: int = 2, pile_samples: int = 500, 
+                           max_api_calls: int = 200) -> Dict[str, Any]:
+    """Quick entry point for fast dataset building"""
+    builder = OptimizedNgramBuilder(max_workers=3)  # Conservative threading
+    return builder.build_fast_dataset(n_gram_size, pile_samples, max_api_calls)
+
+
+def save_dataset(dataset: Dict[str, Any], output_path: str):
+    """Save dataset to JSON"""
+    output_path = Path(output_path).with_suffix('.json')
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    def save_dataset(self, dataset: Dict[str, Any], 
-                    save_path: str = "./ngram_dataset",
-                    format: str = "both") -> None:
-        """Save dataset in multiple formats"""
-        
-        save_dir = Path(save_path)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        
-        if format in ["json", "both"]:
-            # Save as JSON
-            json_path = save_dir / "dataset.json"
-            with open(json_path, 'w') as f:
-                json.dump(dataset, f, indent=2, default=str)
-            print(f"Saved JSON dataset to {json_path}")
-        
-        if format in ["hf", "both"]:
-            # Save as HuggingFace dataset
-            hf_dataset = Dataset.from_dict(dataset)
-            hf_path = save_dir / "hf_dataset"
-            hf_dataset.save_to_disk(str(hf_path))
-            print(f"Saved HuggingFace dataset to {hf_path}")
-        
-        # Save analysis report
-        report = self.generate_analysis_report(dataset)
-        report_path = save_dir / "analysis_report.md"
-        with open(report_path, 'w') as f:
-            f.write(report)
-        print(f"Saved analysis report to {report_path}")
+    with open(output_path, 'w') as f:
+        json.dump(dataset, f, indent=2, default=str)
+    print(f"Saved dataset to {output_path}")
+
+
+# Example usage
+if __name__ == "__main__":
+    print("🔥 Fast N-gram Dataset Builder")
     
-    def generate_analysis_report(self, dataset: Dict[str, Any]) -> str:
-        """Generate comprehensive analysis report"""
-        
-        df = pd.DataFrame(dataset)
-        
-        report = f"""# N-Gram Dataset Analysis Report
-
-## Dataset Overview
-- **Total samples**: {len(df)}
-- **Unique n-grams**: {df['ngrams'].nunique()}
-- **Categories**: {df['categories'].nunique()}
-- **Mean confidence score**: {df['confidence_scores'].mean():.3f}
-
-## Category Distribution
-```
-{df['categories'].value_counts().to_string()}
-```
-
-## Frequency Analysis
-### Local Frequencies
-- **Range**: {df['local_frequencies'].min()} - {df['local_frequencies'].max()}
-- **Mean**: {df['local_frequencies'].mean():.2f}
-- **Median**: {df['local_frequencies'].median():.2f}
-
-### Global Frequencies (where available)
-"""
-        
-        global_freq_available = df[df['global_frequencies'] > 0]
-        if len(global_freq_available) > 0:
-            report += f"""- **Available**: {len(global_freq_available)} / {len(df)} samples
-- **Range**: {global_freq_available['global_frequencies'].min()} - {global_freq_available['global_frequencies'].max()}
-- **Mean**: {global_freq_available['global_frequencies'].mean():.2f}
-"""
-        else:
-            report += "- No global frequency data available\n"
-        
-        report += f"""
-## Text Statistics
-- **Mean text length**: {df['texts'].str.len().mean():.0f} characters
-- **Text length range**: {df['texts'].str.len().min()} - {df['texts'].str.len().max()}
-
-## Sample N-grams by Category
-"""
-        
-        for category in df['categories'].unique():
-            cat_df = df[df['categories'] == category]
-            sample_ngrams = cat_df.nlargest(5, 'confidence_scores')['ngrams'].tolist()
-            report += f"\n### {category.replace('_', ' ').title()}\n"
-            report += f"**Count**: {len(cat_df)}\n"
-            report += f"**Sample n-grams**: {', '.join(sample_ngrams)}\n"
-        
-        return report
-
-
-def main():
-    """Main function to build and save dataset"""
-    
-    builder = ImprovedNGramDatasetBuilder(max_samples=3000)
-    
-    print("Building improved n-gram dataset...")
-    dataset = builder.build_stratified_ngram_dataset(
+    # Build a small, fast dataset
+    dataset = build_fast_ngram_dataset(
         n_gram_size=2,
-        pile_samples=2000,
-        min_word_length=2
+        pile_samples=500,     # Reduced for speed
+        max_api_calls=150     # Limited API calls
     )
     
-    print("\nSaving dataset...")
-    builder.save_dataset(dataset, "./improved_ngram_dataset", format="both")
+    # Quick stats
+    print(f"\n📊 Dataset Stats:")
+    print(f"Total samples: {len(dataset['texts'])}")
+    print(f"Unique n-grams: {len(set(dataset['ngrams']))}")
     
-    print("\nDataset creation complete!")
-    return dataset
-
-
-if __name__ == "__main__":
-    dataset = main()
+    categories = Counter(dataset['categories'])
+    for cat, count in categories.items():
+        print(f"{cat}: {count} samples")
+    
+    # Save
+    save_dataset(dataset, "./fast_ngram_dataset")
+    print("✅ Done!")
+    print(dataset)

@@ -1,537 +1,533 @@
 #!/usr/bin/env python3
 """
-Comprehensive Polytope Metrics for Activation Analysis
-Advanced geometric analysis of neural activation polytopes for polysemanticity research
+Simplified Polytope Metrics for Activation Analysis
+Simple functions for geometric analysis of neural activation polytopes
 """
 
 import numpy as np
 import pandas as pd
 from scipy.spatial import ConvexHull, distance_matrix
-from scipy.optimize import minimize
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from typing import List, Dict, Any, Tuple, Optional, Union
+from typing import Dict, Any, List, Tuple, Optional
 import matplotlib.pyplot as plt
-import seaborn as sns
-from tqdm import tqdm
 import warnings
-from dataclasses import dataclass
-import pickle
-from pathlib import Path
+from tqdm import tqdm
 
 
-@dataclass
-class PolytopeMetrics:
-    """Container for polytope analysis results"""
-    volume: float
-    surface_area: float
-    n_vertices: int
-    n_faces: int
-    diameter: float
-    radius: float
-    aspect_ratio: float
-    complexity_score: float
-    dimensional_spread: List[float]
-    effective_dimension: int
-    stability_score: float
-    metadata: Dict[str, Any]
+def preprocess_activations(activations: np.ndarray, 
+                         normalize: bool = True,
+                         remove_duplicates: bool = True) -> np.ndarray:
+    """
+    Clean and preprocess activation vectors
+    
+    Args:
+        activations: Array of shape (n_samples, n_features)
+        normalize: Whether to standardize features
+        remove_duplicates: Whether to remove duplicate vectors
+        
+    Returns:
+        Cleaned activation array
+    """
+    # Remove zero vectors
+    non_zero_mask = np.any(activations != 0, axis=1)
+    if not np.any(non_zero_mask):
+        raise ValueError("All activation vectors are zero")
+    
+    cleaned = activations[non_zero_mask]
+    
+    # Remove duplicates if requested
+    if remove_duplicates:
+        cleaned = np.unique(cleaned, axis=0)
+    
+    # Normalize if requested
+    if normalize:
+        scaler = StandardScaler()
+        cleaned = scaler.fit_transform(cleaned)
+    
+    return cleaned
 
 
-class AdvancedPolytopeAnalyzer:
-    """Advanced analyzer for neural activation polytopes"""
+def reduce_dimensions(activations: np.ndarray, n_components: int = 10) -> Tuple[np.ndarray, PCA]:
+    """
+    Reduce dimensionality using PCA
     
-    def __init__(self, 
-                 pca_components: int = 10,
-                 min_points_for_hull: int = 4,
-                 stability_samples: int = 100):
-        """
-        Initialize the polytope analyzer
+    Args:
+        activations: Input activation vectors
+        n_components: Number of PCA components
         
-        Args:
-            pca_components: Number of PCA components for dimensionality reduction
-            min_points_for_hull: Minimum points needed to compute convex hull
-            stability_samples: Number of bootstrap samples for stability analysis
-        """
-        self.pca_components = pca_components
-        self.min_points_for_hull = min_points_for_hull
-        self.stability_samples = stability_samples
-        self.scaler = StandardScaler()
-        self.pca = PCA(n_components=pca_components)
-        
-    def analyze_activation_polytope(self, 
-                                  activation_vectors: np.ndarray,
-                                  normalize: bool = True,
-                                  compute_stability: bool = True) -> PolytopeMetrics:
-        """
-        Comprehensive polytope analysis of activation vectors
-        
-        Args:
-            activation_vectors: Array of shape (n_samples, n_features)
-            normalize: Whether to normalize activation vectors
-            compute_stability: Whether to compute stability metrics
-            
-        Returns:
-            PolytopeMetrics object with all computed metrics
-        """
-        
-        if len(activation_vectors) < self.min_points_for_hull:
-            return self._create_empty_metrics(
-                f"Insufficient points: {len(activation_vectors)} < {self.min_points_for_hull}"
-            )
-        
-        try:
-            # Preprocess activations
-            processed_activations = self._preprocess_activations(activation_vectors, normalize)
-            
-            # Reduce dimensionality for polytope computation
-            reduced_activations = self._reduce_dimensionality(processed_activations)
-            
-            # Compute convex hull
-            hull = ConvexHull(reduced_activations)
-            
-            # Calculate basic metrics
-            volume = self._compute_volume(hull, reduced_activations)
-            surface_area = self._compute_surface_area(hull)
-            n_vertices = len(hull.vertices)
-            n_faces = len(hull.simplices)
-            
-            # Calculate geometric properties
-            diameter = self._compute_diameter(reduced_activations[hull.vertices])
-            radius = self._compute_circumradius(reduced_activations[hull.vertices])
-            aspect_ratio = self._compute_aspect_ratio(reduced_activations[hull.vertices])
-            
-            # Calculate complexity and dimensional metrics
-            complexity_score = self._compute_complexity_score(hull, reduced_activations)
-            dimensional_spread = self._compute_dimensional_spread(reduced_activations)
-            effective_dimension = self._compute_effective_dimension(processed_activations)
-            
-            # Calculate stability if requested
-            stability_score = 0.0
-            if compute_stability and len(activation_vectors) >= 2 * self.min_points_for_hull:
-                stability_score = self._compute_stability_score(reduced_activations)
-            
-            # Create metadata
-            metadata = {
-                'n_original_points': len(activation_vectors),
-                'original_dimension': activation_vectors.shape[1],
-                'reduced_dimension': reduced_activations.shape[1],
-                'hull_valid': True,
-                'preprocessing_applied': normalize,
-                'pca_explained_variance_ratio': self.pca.explained_variance_ratio_.tolist(),
-                'total_variance_explained': self.pca.explained_variance_ratio_.sum()
-            }
-            
-            return PolytopeMetrics(
-                volume=volume,
-                surface_area=surface_area,
-                n_vertices=n_vertices,
-                n_faces=n_faces,
-                diameter=diameter,
-                radius=radius,
-                aspect_ratio=aspect_ratio,
-                complexity_score=complexity_score,
-                dimensional_spread=dimensional_spread,
-                effective_dimension=effective_dimension,
-                stability_score=stability_score,
-                metadata=metadata
-            )
-            
-        except Exception as e:
-            warnings.warn(f"Error in polytope analysis: {e}")
-            return self._create_empty_metrics(f"Analysis error: {str(e)}")
+    Returns:
+        Tuple of (reduced_activations, fitted_pca)
+    """
+    if activations.shape[1] <= n_components:
+        return activations, None
     
-    def _preprocess_activations(self, activations: np.ndarray, normalize: bool) -> np.ndarray:
-        """Preprocess activation vectors"""
-        
-        # Remove zero vectors and duplicates
-        non_zero_mask = np.any(activations != 0, axis=1)
-        if not np.any(non_zero_mask):
-            raise ValueError("All activation vectors are zero")
-        
-        cleaned_activations = activations[non_zero_mask]
-        
-        # Remove duplicate vectors
-        unique_activations = np.unique(cleaned_activations, axis=0)
-        
-        if normalize:
-            # Standardize features
-            unique_activations = self.scaler.fit_transform(unique_activations)
-        
-        return unique_activations
+    pca = PCA(n_components=n_components)
+    reduced = pca.fit_transform(activations)
+    return reduced, pca
+
+
+def compute_convex_hull_metrics(points: np.ndarray, min_points: int = 4) -> Dict[str, Any]:
+    """
+    Compute basic convex hull metrics
     
-    def _reduce_dimensionality(self, activations: np.ndarray) -> np.ndarray:
-        """Reduce dimensionality using PCA"""
+    Args:
+        points: Array of points to analyze
+        min_points: Minimum points needed for hull computation
         
-        if activations.shape[1] <= self.pca_components:
-            return activations
-        
-        # Fit PCA and transform
-        reduced = self.pca.fit_transform(activations)
-        return reduced
+    Returns:
+        Dictionary with hull metrics
+    """
+    if len(points) < min_points:
+        return {
+            'volume': 0.0,
+            'surface_area': 0.0,
+            'n_vertices': 0,
+            'n_faces': 0,
+            'hull_valid': False,
+            'error': f"Insufficient points: {len(points)} < {min_points}"
+        }
     
-    def _compute_volume(self, hull: ConvexHull, points: np.ndarray) -> float:
-        """Compute polytope volume"""
-        try:
-            if points.shape[1] == 1:
-                # 1D case: length
-                return np.max(points) - np.min(points)
-            elif points.shape[1] == 2:
-                # 2D case: area
-                return hull.volume  # In 2D, this is area
-            else:
-                # nD case: hypervolume
-                return hull.volume
-        except:
-            # Fallback: approximate volume using bounding box
-            ranges = np.max(points, axis=0) - np.min(points, axis=0)
-            return np.prod(ranges)
-    
-    def _compute_surface_area(self, hull: ConvexHull) -> float:
-        """Compute polytope surface area"""
-        try:
-            return hull.area
-        except:
-            # Fallback for cases where area computation fails
-            return 0.0
-    
-    def _compute_diameter(self, vertices: np.ndarray) -> float:
-        """Compute maximum distance between vertices"""
-        if len(vertices) < 2:
-            return 0.0
+    try:
+        hull = ConvexHull(points)
         
-        distances = distance_matrix(vertices, vertices)
-        return np.max(distances)
-    
-    def _compute_circumradius(self, vertices: np.ndarray) -> float:
-        """Compute circumradius (radius of smallest enclosing sphere)"""
-        if len(vertices) < 2:
-            return 0.0
-        
-        # Approximate as radius of bounding sphere
-        center = np.mean(vertices, axis=0)
-        distances = np.linalg.norm(vertices - center, axis=1)
-        return np.max(distances)
-    
-    def _compute_aspect_ratio(self, vertices: np.ndarray) -> float:
-        """Compute aspect ratio (ratio of largest to smallest principal axis)"""
-        if len(vertices) < 2:
-            return 1.0
-        
-        # Use SVD to find principal axes
-        centered = vertices - np.mean(vertices, axis=0)
-        _, s, _ = np.linalg.svd(centered, full_matrices=False)
-        
-        if s[-1] == 0:
-            return float('inf')
-        
-        return s[0] / s[-1]
-    
-    def _compute_complexity_score(self, hull: ConvexHull, points: np.ndarray) -> float:
-        """Compute a complexity score based on multiple factors"""
-        
-        # Normalize metrics to [0, 1] range
-        n_points = len(points)
-        n_vertices = len(hull.vertices)
-        n_faces = len(hull.simplices)
-        dimension = points.shape[1]
-        
-        # Vertex efficiency: ratio of vertices to total points
-        vertex_efficiency = n_vertices / n_points if n_points > 0 else 0
-        
-        # Face density: faces per vertex
-        face_density = n_faces / n_vertices if n_vertices > 0 else 0
-        
-        # Dimensional complexity: compare to theoretical maximum
-        theoretical_max_vertices = 2 ** dimension  # Hypercube vertices
-        vertex_complexity = n_vertices / theoretical_max_vertices if theoretical_max_vertices > 0 else 0
-        
-        # Combine metrics
-        complexity = (vertex_efficiency + face_density + vertex_complexity) / 3
-        return min(complexity, 1.0)  # Cap at 1.0
-    
-    def _compute_dimensional_spread(self, points: np.ndarray) -> List[float]:
-        """Compute spread (variance) in each dimension"""
-        return np.var(points, axis=0).tolist()
-    
-    def _compute_effective_dimension(self, points: np.ndarray) -> int:
-        """Compute effective dimensionality using PCA variance threshold"""
-        
-        if points.shape[1] <= 1:
-            return points.shape[1]
-        
-        # Use current PCA fit or create new one
-        if hasattr(self.pca, 'explained_variance_ratio_'):
-            explained_var = self.pca.explained_variance_ratio_
+        # Compute volume (handle different dimensions)
+        if points.shape[1] == 1:
+            volume = np.max(points) - np.min(points)
         else:
-            temp_pca = PCA()
-            temp_pca.fit(points)
-            explained_var = temp_pca.explained_variance_ratio_
+            volume = hull.volume
         
-        # Find number of components needed for 95% variance
-        cumsum_var = np.cumsum(explained_var)
-        effective_dim = np.argmax(cumsum_var >= 0.95) + 1
-        
-        return min(effective_dim, len(explained_var))
-    
-    def _compute_stability_score(self, points: np.ndarray) -> float:
-        """Compute stability score using bootstrap sampling"""
-        
-        if len(points) < 2 * self.min_points_for_hull:
-            return 0.0
-        
-        n_points = len(points)
-        subsample_size = max(self.min_points_for_hull, n_points // 2)
-        volumes = []
-        
-        for _ in range(self.stability_samples):
-            try:
-                # Random subsample
-                indices = np.random.choice(n_points, subsample_size, replace=False)
-                subset_points = points[indices]
-                
-                # Compute hull and volume
-                subset_hull = ConvexHull(subset_points)
-                volume = self._compute_volume(subset_hull, subset_points)
-                volumes.append(volume)
-                
-            except:
-                continue  # Skip failed samples
-        
-        if len(volumes) < 2:
-            return 0.0
-        
-        # Stability as inverse of coefficient of variation
-        mean_volume = np.mean(volumes)
-        std_volume = np.std(volumes)
-        
-        if mean_volume == 0:
-            return 0.0
-        
-        cv = std_volume / mean_volume
-        stability = 1.0 / (1.0 + cv)  # Higher stability = lower variation
-        
-        return stability
-    
-    def _create_empty_metrics(self, reason: str) -> PolytopeMetrics:
-        """Create empty metrics object for failed analysis"""
-        return PolytopeMetrics(
-            volume=0.0,
-            surface_area=0.0,
-            n_vertices=0,
-            n_faces=0,
-            diameter=0.0,
-            radius=0.0,
-            aspect_ratio=1.0,
-            complexity_score=0.0,
-            dimensional_spread=[],
-            effective_dimension=0,
-            stability_score=0.0,
-            metadata={'error': reason, 'hull_valid': False}
-        )
-    
-    def analyze_polytope_evolution(self, 
-                                 activation_data: Dict[str, np.ndarray],
-                                 ngram: str = None,
-                                 layer: int = None) -> pd.DataFrame:
-        """
-        Analyze how polytope metrics evolve across checkpoints
-        
-        Args:
-            activation_data: Dict mapping checkpoint -> activation matrix
-            ngram: Specific n-gram to analyze (optional)
-            layer: Specific layer to analyze (optional)
-            
-        Returns:
-            DataFrame with polytope metrics across checkpoints
-        """
-        
-        results = []
-        
-        for checkpoint, activations in tqdm(activation_data.items(), desc="Analyzing evolution"):
-            metrics = self.analyze_activation_polytope(activations)
-            
-            result_row = {
-                'checkpoint': checkpoint,
-                'ngram': ngram,
-                'layer': layer,
-                'volume': metrics.volume,
-                'surface_area': metrics.surface_area,
-                'n_vertices': metrics.n_vertices,
-                'n_faces': metrics.n_faces,
-                'diameter': metrics.diameter,
-                'radius': metrics.radius,
-                'aspect_ratio': metrics.aspect_ratio,
-                'complexity_score': metrics.complexity_score,
-                'effective_dimension': metrics.effective_dimension,
-                'stability_score': metrics.stability_score,
-                'n_points': metrics.metadata.get('n_original_points', 0),
-                'variance_explained': metrics.metadata.get('total_variance_explained', 0)
-            }
-            
-            results.append(result_row)
-        
-        return pd.DataFrame(results)
-    
-    def compare_polytopes(self, 
-                         polytope_metrics_list: List[PolytopeMetrics],
-                         labels: List[str] = None) -> Dict[str, Any]:
-        """Compare multiple polytopes across various metrics"""
-        
-        if labels is None:
-            labels = [f"Polytope_{i}" for i in range(len(polytope_metrics_list))]
-        
-        comparison_data = {
-            'labels': labels,
-            'volumes': [m.volume for m in polytope_metrics_list],
-            'complexities': [m.complexity_score for m in polytope_metrics_list],
-            'stabilities': [m.stability_score for m in polytope_metrics_list],
-            'dimensions': [m.effective_dimension for m in polytope_metrics_list],
-            'n_vertices': [m.n_vertices for m in polytope_metrics_list]
+        return {
+            'volume': float(volume),
+            'surface_area': float(hull.area),
+            'n_vertices': len(hull.vertices),
+            'n_faces': len(hull.simplices),
+            'hull_valid': True,
+            'hull': hull
         }
         
-        # Compute relative metrics
-        base_volume = comparison_data['volumes'][0] if comparison_data['volumes'][0] > 0 else 1
-        comparison_data['volume_ratios'] = [v / base_volume for v in comparison_data['volumes']]
+    except Exception as e:
+        # Fallback: use bounding box volume
+        ranges = np.max(points, axis=0) - np.min(points, axis=0)
+        volume = np.prod(ranges)
         
-        # Statistical summaries
-        comparison_data['volume_stats'] = {
-            'mean': np.mean(comparison_data['volumes']),
-            'std': np.std(comparison_data['volumes']),
-            'range': np.max(comparison_data['volumes']) - np.min(comparison_data['volumes'])
+        return {
+            'volume': float(volume),
+            'surface_area': 0.0,
+            'n_vertices': len(points),
+            'n_faces': 0,
+            'hull_valid': False,
+            'error': str(e)
         }
-        
-        return comparison_data
-    
-    def visualize_polytope_evolution(self, 
-                                   evolution_df: pd.DataFrame,
-                                   metrics: List[str] = None,
-                                   figsize: Tuple[int, int] = (12, 8)) -> plt.Figure:
-        """Visualize polytope evolution over checkpoints"""
-        
-        if metrics is None:
-            metrics = ['volume', 'complexity_score', 'stability_score', 'effective_dimension']
-        
-        fig, axes = plt.subplots(2, 2, figsize=figsize)
-        axes = axes.flatten()
-        
-        for i, metric in enumerate(metrics[:4]):
-            if metric in evolution_df.columns:
-                ax = axes[i]
-                
-                if 'checkpoint' in evolution_df.columns:
-                    # Convert checkpoint to numeric for plotting
-                    checkpoints = pd.to_numeric(evolution_df['checkpoint'], errors='coerce')
-                    ax.plot(checkpoints, evolution_df[metric], marker='o', linewidth=2)
-                    ax.set_xlabel('Checkpoint')
-                else:
-                    ax.plot(evolution_df.index, evolution_df[metric], marker='o', linewidth=2)
-                    ax.set_xlabel('Index')
-                
-                ax.set_ylabel(metric.replace('_', ' ').title())
-                ax.set_title(f'{metric.replace("_", " ").title()} Evolution')
-                ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        return fig
 
 
-# Convenience functions for common use cases
-def get_polytope_metrics(activation_vectors: np.ndarray, **kwargs) -> PolytopeMetrics:
+def compute_geometric_properties(points: np.ndarray) -> Dict[str, float]:
     """
-    Convenience function to calculate polytope metrics
+    Compute geometric properties of point set
     
     Args:
-        activation_vectors: Array of activation vectors
-        **kwargs: Additional arguments for AdvancedPolytopeAnalyzer
+        points: Array of points
         
     Returns:
-        PolytopeMetrics object
+        Dictionary with geometric properties
     """
-    analyzer = AdvancedPolytopeAnalyzer(**kwargs)
-    return analyzer.analyze_activation_polytope(activation_vectors)
+    if len(points) < 2:
+        return {
+            'diameter': 0.0,
+            'radius': 0.0,
+            'aspect_ratio': 1.0
+        }
+    
+    # Diameter: maximum distance between points
+    distances = distance_matrix(points, points)
+    diameter = np.max(distances)
+    
+    # Radius: max distance from centroid
+    center = np.mean(points, axis=0)
+    radii = np.linalg.norm(points - center, axis=1)
+    radius = np.max(radii)
+    
+    # Aspect ratio: ratio of largest to smallest principal axis
+    centered = points - center
+    if len(centered) > points.shape[1]:  # Only if we have enough points
+        try:
+            _, s, _ = np.linalg.svd(centered, full_matrices=False)
+            aspect_ratio = s[0] / s[-1] if s[-1] > 0 else float('inf')
+        except:
+            aspect_ratio = 1.0
+    else:
+        aspect_ratio = 1.0
+    
+    return {
+        'diameter': float(diameter),
+        'radius': float(radius),
+        'aspect_ratio': float(aspect_ratio)
+    }
 
 
-def compute_polytope_complexity_evolution(checkpoint_activations: Dict[str, np.ndarray]) -> pd.DataFrame:
+def compute_effective_dimension(points: np.ndarray, variance_threshold: float = 0.95) -> int:
     """
-    Compute polytope complexity evolution across checkpoints
+    Compute effective dimensionality using PCA
     
     Args:
-        checkpoint_activations: Dict mapping checkpoint -> activation matrix
+        points: Input points
+        variance_threshold: Cumulative variance threshold
         
     Returns:
-        DataFrame with complexity metrics
+        Effective dimension
     """
-    analyzer = AdvancedPolytopeAnalyzer()
-    return analyzer.analyze_polytope_evolution(checkpoint_activations)
+    if points.shape[1] <= 1:
+        return points.shape[1]
+    
+    try:
+        pca = PCA()
+        pca.fit(points)
+        
+        cumsum_var = np.cumsum(pca.explained_variance_ratio_)
+        effective_dim = np.argmax(cumsum_var >= variance_threshold) + 1
+        
+        return min(effective_dim, len(pca.explained_variance_ratio_))
+    except:
+        return points.shape[1]
 
 
-def compare_activation_polytopes(activation_groups: List[np.ndarray], 
-                               group_names: List[str] = None) -> Dict[str, Any]:
+def compute_complexity_score(hull_metrics: Dict[str, Any], points: np.ndarray) -> float:
+    """
+    Compute polytope complexity score
+    
+    Args:
+        hull_metrics: Results from compute_convex_hull_metrics
+        points: Original points
+        
+    Returns:
+        Complexity score between 0 and 1
+    """
+    if not hull_metrics['hull_valid']:
+        return 0.0
+    
+    n_points = len(points)
+    n_vertices = hull_metrics['n_vertices']
+    n_faces = hull_metrics['n_faces']
+    dimension = points.shape[1]
+    
+    # Vertex efficiency: ratio of vertices to total points
+    vertex_efficiency = n_vertices / n_points if n_points > 0 else 0
+    
+    # Face density: faces per vertex
+    face_density = n_faces / n_vertices if n_vertices > 0 else 0
+    
+    # Dimensional complexity
+    theoretical_max_vertices = min(2 ** dimension, n_points)
+    vertex_complexity = n_vertices / theoretical_max_vertices if theoretical_max_vertices > 0 else 0
+    
+    # Combine metrics
+    complexity = (vertex_efficiency + face_density + vertex_complexity) / 3
+    return min(complexity, 1.0)
+
+
+def compute_stability_score(points: np.ndarray, 
+                          n_samples: int = 50,
+                          subsample_ratio: float = 0.7) -> float:
+    """
+    Compute stability score using bootstrap sampling
+    
+    Args:
+        points: Input points
+        n_samples: Number of bootstrap samples
+        subsample_ratio: Fraction of points to sample
+        
+    Returns:
+        Stability score (higher = more stable)
+    """
+    n_points = len(points)
+    subsample_size = max(4, int(n_points * subsample_ratio))
+    
+    if subsample_size >= n_points or n_points < 8:
+        return 0.0
+    
+    volumes = []
+    
+    for _ in range(n_samples):
+        try:
+            # Random subsample
+            indices = np.random.choice(n_points, subsample_size, replace=False)
+            subset_points = points[indices]
+            
+            # Compute volume
+            hull_metrics = compute_convex_hull_metrics(subset_points)
+            if hull_metrics['hull_valid']:
+                volumes.append(hull_metrics['volume'])
+        except:
+            continue
+    
+    if len(volumes) < 2:
+        return 0.0
+    
+    # Stability as inverse of coefficient of variation
+    mean_volume = np.mean(volumes)
+    std_volume = np.std(volumes)
+    
+    if mean_volume == 0:
+        return 0.0
+    
+    cv = std_volume / mean_volume
+    return 1.0 / (1.0 + cv)
+
+
+def analyze_activation_polytope(activation_vectors: np.ndarray,
+                              normalize: bool = True,
+                              pca_components: int = 10,
+                              compute_stability: bool = True) -> Dict[str, Any]:
+    """
+    Complete polytope analysis of activation vectors
+    
+    Args:
+        activation_vectors: Array of shape (n_samples, n_features)
+        normalize: Whether to normalize activations
+        pca_components: Number of PCA components for dimensionality reduction
+        compute_stability: Whether to compute stability metrics
+        
+    Returns:
+        Dictionary with all polytope metrics
+    """
+    
+    # Preprocess
+    try:
+        processed = preprocess_activations(activation_vectors, normalize=normalize)
+    except ValueError as e:
+        return {'error': str(e), 'valid': False}
+    
+    # Reduce dimensionality
+    reduced, pca = reduce_dimensions(processed, pca_components)
+    
+    # Compute hull metrics
+    hull_metrics = compute_convex_hull_metrics(reduced)
+    
+    # Compute geometric properties
+    geometric_props = compute_geometric_properties(reduced)
+    
+    # Compute complexity
+    complexity = compute_complexity_score(hull_metrics, reduced)
+    
+    # Compute effective dimension
+    effective_dim = compute_effective_dimension(processed)
+    
+    # Compute stability if requested
+    stability = 0.0
+    if compute_stability and len(processed) >= 8:
+        stability = compute_stability_score(reduced)
+    
+    # Dimensional spread
+    dimensional_spread = np.var(reduced, axis=0).tolist()
+    
+    # Combine all metrics
+    result = {
+        'volume': hull_metrics['volume'],
+        'surface_area': hull_metrics['surface_area'],
+        'n_vertices': hull_metrics['n_vertices'],
+        'n_faces': hull_metrics['n_faces'],
+        'diameter': geometric_props['diameter'],
+        'radius': geometric_props['radius'],
+        'aspect_ratio': geometric_props['aspect_ratio'],
+        'complexity_score': complexity,
+        'effective_dimension': effective_dim,
+        'stability_score': stability,
+        'dimensional_spread': dimensional_spread,
+        'valid': hull_metrics['hull_valid'],
+        'n_original_points': len(activation_vectors),
+        'n_processed_points': len(processed),
+        'original_dimension': activation_vectors.shape[1],
+        'reduced_dimension': reduced.shape[1]
+    }
+    
+    # Add PCA info if available
+    if pca is not None:
+        result['pca_variance_explained'] = pca.explained_variance_ratio_.sum()
+    
+    return result
+
+
+def analyze_polytope_evolution(activation_data: Dict[str, np.ndarray],
+                             **kwargs) -> pd.DataFrame:
+    """
+    Analyze polytope evolution across checkpoints
+    
+    Args:
+        activation_data: Dict mapping checkpoint -> activation matrix
+        **kwargs: Additional arguments for analyze_activation_polytope
+        
+    Returns:
+        DataFrame with evolution metrics
+    """
+    results = []
+    
+    for checkpoint, activations in tqdm(activation_data.items(), desc="Analyzing evolution"):
+        metrics = analyze_activation_polytope(activations, **kwargs)
+        
+        row = {'checkpoint': checkpoint}
+        row.update(metrics)
+        results.append(row)
+    
+    return pd.DataFrame(results)
+
+
+def compare_polytopes(activation_groups: List[np.ndarray],
+                     group_names: List[str] = None,
+                     **kwargs) -> Dict[str, Any]:
     """
     Compare polytopes across different activation groups
     
     Args:
-        activation_groups: List of activation matrices to compare
+        activation_groups: List of activation matrices
         group_names: Names for each group
+        **kwargs: Additional arguments for analyze_activation_polytope
         
     Returns:
-        Comparison results dictionary
+        Comparison results
     """
-    analyzer = AdvancedPolytopeAnalyzer()
+    if group_names is None:
+        group_names = [f"Group_{i}" for i in range(len(activation_groups))]
     
-    # Compute metrics for each group
+    # Analyze each group
     metrics_list = []
     for activations in activation_groups:
-        metrics = analyzer.analyze_activation_polytope(activations)
+        metrics = analyze_activation_polytope(activations, **kwargs)
         metrics_list.append(metrics)
     
-    # Compare polytopes
-    return analyzer.compare_polytopes(metrics_list, group_names)
+    # Extract key metrics for comparison
+    volumes = [m.get('volume', 0) for m in metrics_list]
+    complexities = [m.get('complexity_score', 0) for m in metrics_list]
+    dimensions = [m.get('effective_dimension', 0) for m in metrics_list]
+    
+    # Compute relative metrics
+    base_volume = volumes[0] if volumes[0] > 0 else 1
+    volume_ratios = [v / base_volume for v in volumes]
+    
+    return {
+        'group_names': group_names,
+        'volumes': volumes,
+        'volume_ratios': volume_ratios,
+        'complexities': complexities,
+        'effective_dimensions': dimensions,
+        'detailed_metrics': metrics_list,
+        'summary': {
+            'volume_mean': np.mean(volumes),
+            'volume_std': np.std(volumes),
+            'complexity_mean': np.mean(complexities),
+            'complexity_std': np.std(complexities)
+        }
+    }
+
+
+def plot_polytope_evolution(evolution_df: pd.DataFrame,
+                           metrics: List[str] = None,
+                           figsize: Tuple[int, int] = (12, 8)) -> plt.Figure:
+    """
+    Plot polytope evolution over checkpoints
+    
+    Args:
+        evolution_df: DataFrame from analyze_polytope_evolution
+        metrics: List of metrics to plot
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib figure
+    """
+    if metrics is None:
+        metrics = ['volume', 'complexity_score', 'stability_score', 'effective_dimension']
+    
+    # Filter available metrics
+    available_metrics = [m for m in metrics if m in evolution_df.columns]
+    n_metrics = len(available_metrics)
+    
+    if n_metrics == 0:
+        raise ValueError("No valid metrics found in DataFrame")
+    
+    # Create subplots
+    n_cols = 2
+    n_rows = (n_metrics + 1) // 2
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    
+    if n_metrics == 1:
+        axes = [axes]
+    elif n_rows == 1:
+        axes = axes.reshape(1, -1)
+    
+    axes_flat = axes.flatten()
+    
+    # Plot each metric
+    for i, metric in enumerate(available_metrics):
+        ax = axes_flat[i]
+        
+        # Handle checkpoint column
+        if 'checkpoint' in evolution_df.columns:
+            x_data = pd.to_numeric(evolution_df['checkpoint'], errors='coerce')
+            x_label = 'Checkpoint'
+        else:
+            x_data = evolution_df.index
+            x_label = 'Index'
+        
+        ax.plot(x_data, evolution_df[metric], marker='o', linewidth=2, markersize=6)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(metric.replace('_', ' ').title())
+        ax.set_title(f'{metric.replace("_", " ").title()} Evolution')
+        ax.grid(True, alpha=0.3)
+    
+    # Hide unused subplots
+    for i in range(n_metrics, len(axes_flat)):
+        axes_flat[i].set_visible(False)
+    
+    plt.tight_layout()
+    return fig
+
+
+# Convenience functions for common analyses
+def quick_polytope_analysis(activations: np.ndarray) -> Dict[str, Any]:
+    """Quick analysis with default settings"""
+    return analyze_activation_polytope(activations)
+
+
+def compare_ngram_polytopes(high_freq_activations: np.ndarray,
+                           low_freq_activations: np.ndarray) -> Dict[str, Any]:
+    """Compare high vs low frequency n-gram polytopes"""
+    return compare_polytopes(
+        [high_freq_activations, low_freq_activations],
+        ['High-frequency', 'Low-frequency']
+    )
 
 
 # Example usage
 def main():
-    """Example usage of polytope analysis"""
-    
-    # Generate example activation data
+    """Example usage of simplified polytope analysis"""
+    # Generate example data
     np.random.seed(42)
-    n_samples = 100
-    n_features = 512
+    n_samples, n_features = 100, 512
     
-    # Simulate activations with different polytope structures
-    # High-frequency n-gram: more structured (lower complexity)
-    high_freq_activations = np.random.normal(0, 1, (n_samples, n_features))
-    high_freq_activations[:, :10] *= 5  # Emphasize first 10 dimensions
+    # High-frequency n-gram: more structured
+    high_freq = np.random.normal(0, 1, (n_samples, n_features))
+    high_freq[:, :10] *= 5
     
-    # Low-frequency n-gram: more distributed (higher complexity)
-    low_freq_activations = np.random.normal(0, 1, (n_samples, n_features))
+    # Low-frequency n-gram: more distributed  
+    low_freq = np.random.normal(0, 1, (n_samples, n_features))
     
-    # Analyze polytopes
-    analyzer = AdvancedPolytopeAnalyzer()
+    # Analyze
+    high_metrics = quick_polytope_analysis(high_freq)
+    low_metrics = quick_polytope_analysis(low_freq)
     
-    high_freq_metrics = analyzer.analyze_activation_polytope(high_freq_activations)
-    low_freq_metrics = analyzer.analyze_activation_polytope(low_freq_activations)
+    print("High-frequency n-gram:")
+    print(f"  Volume: {high_metrics['volume']:.4f}")
+    print(f"  Complexity: {high_metrics['complexity_score']:.4f}")
+    print(f"  Effective dimension: {high_metrics['effective_dimension']}")
     
-    print("High-frequency n-gram polytope:")
-    print(f"  Volume: {high_freq_metrics.volume:.4f}")
-    print(f"  Complexity: {high_freq_metrics.complexity_score:.4f}")
-    print(f"  Effective dimension: {high_freq_metrics.effective_dimension}")
+    print("\nLow-frequency n-gram:")
+    print(f"  Volume: {low_metrics['volume']:.4f}")
+    print(f"  Complexity: {low_metrics['complexity_score']:.4f}")
+    print(f"  Effective dimension: {low_metrics['effective_dimension']}")
     
-    print("\nLow-frequency n-gram polytope:")
-    print(f"  Volume: {low_freq_metrics.volume:.4f}")
-    print(f"  Complexity: {low_freq_metrics.complexity_score:.4f}")
-    print(f"  Effective dimension: {low_freq_metrics.effective_dimension}")
-    
-    # Compare polytopes
-    comparison = analyzer.compare_polytopes(
-        [high_freq_metrics, low_freq_metrics],
-        ['High-frequency', 'Low-frequency']
-    )
-    
+    # Compare
+    comparison = compare_ngram_polytopes(high_freq, low_freq)
     print(f"\nVolume ratio (low/high): {comparison['volume_ratios'][1]:.4f}")
-    
-    return analyzer, high_freq_metrics, low_freq_metrics
 
 
 if __name__ == "__main__":
-    analyzer, high_freq, low_freq = main()
+    main()
