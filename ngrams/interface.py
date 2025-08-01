@@ -60,7 +60,7 @@ def batch_counts(
         dict mapping each n-gram to an array of counts (shape = cutoffs.shape).
     """
     results: Dict[NGram, np.ndarray] = {}
-    num_checkpoints = cutoffs.shape[0]
+    # num_checkpoints = cutoffs.shape[0]
 
     for start in range(0, len(ngrams), batch_size):
         batch = ngrams[start : start + batch_size]
@@ -73,6 +73,11 @@ def batch_counts(
             # adjust cutoffs by (n-1) so end positions <= cutoff
             end_limits = cutoffs - (n - 1)
             # binary search: count of positions <= each end_limit
+
+            positions = np.asarray(positions, dtype=np.int64)
+            if positions.size > 1 and not np.all(positions[:-1] <= positions[1:]):
+                positions = np.sort(positions, kind="stable")
+
             counts = np.searchsorted(positions, end_limits, side="right")
             results[ng] = counts  # shape: (num_checkpoints,)
 
