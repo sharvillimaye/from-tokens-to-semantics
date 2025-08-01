@@ -36,7 +36,8 @@ def create_activation_record(checkpoint_step: str,
     """Create a structured activation record as dictionary"""
     
     # Compute additional metrics
-    binary_pattern = (activation_vector > 0).astype(int)
+    threshold: float = -0.1797 # for GPT-NeoX
+    binary_pattern = (activation_vector > threshold).astype(int)
     sparsity = 1.0 - (np.count_nonzero(activation_vector) / len(activation_vector))
     activation_norm = float(np.linalg.norm(activation_vector))
     n_active_neurons = int(np.count_nonzero(activation_vector))
@@ -301,9 +302,11 @@ def extract_activations_from_dataset(model_name: str,
                                    checkpoints: List[str],
                                    dataset: Dict[str, List[Any]],
                                    target_layers: List[int] = None,
-                                   batch_size: int = 1) -> List[Dict[str, Any]]:
+                                   batch_size: int = 1,
+                                   frequency_threshold: float = None) -> List[Dict[str, Any]]:
     """
     Extract activations from a complete dataset across checkpoints
+    Enhanced version with frequency processing for multi-dimensional analysis
     
     Args:
         model_name: Model identifier
@@ -311,9 +314,10 @@ def extract_activations_from_dataset(model_name: str,
         dataset: Dataset with 'texts', 'ngrams', 'categories' keys
         target_layers: Layer indices to analyze
         batch_size: Batch size for processing
+        frequency_threshold: Optional frequency threshold for filtering
         
     Returns:
-        List of all activation records
+        List of all activation records with frequency information
     """
     
     if target_layers is None:
@@ -326,6 +330,15 @@ def extract_activations_from_dataset(model_name: str,
     print(f"Dataset size: {total_texts} samples")
     print(f"Target layers: {target_layers}")
     
+    # Compute n-gram frequencies if available
+    ngram_frequencies = {}
+    if 'frequency_categories' in dataset:
+        unique_ngrams = list(set(dataset['ngrams']))
+        for ngram in unique_ngrams:
+            # Count occurrences (simple frequency estimation)
+            count = dataset['ngrams'].count(ngram)
+            ngram_frequencies[ngram] = count / len(dataset['ngrams'])
+    
     for checkpoint_idx, checkpoint in enumerate(checkpoints):
         print(f"\nProcessing checkpoint {checkpoint_idx+1}/{len(checkpoints)}: step{checkpoint}")
         
@@ -334,7 +347,14 @@ def extract_activations_from_dataset(model_name: str,
         for text_idx in tqdm(range(total_texts), desc=f"Checkpoint {checkpoint}"):
             text = dataset['texts'][text_idx]
             ngram = dataset['ngrams'][text_idx]
-            category = dataset['categories'][text_idx] if 'categories' in dataset else "unknown"
+            category = dataset.get('frequency_categories', ['unknown'])[text_idx] if 'frequency_categories' in dataset else "unknown"
+            
+            # Get n-gram frequency
+            ngram_freq = ngram_frequencies.get(ngram, 0.0)
+            
+            # Apply frequency threshold if specified
+            if frequency_threshold is not None and ngram_freq < frequency_threshold:
+                continue
             
             # Extract activations for this text/ngram combination
             text_records = extract_activations_for_ngram(
@@ -347,13 +367,158 @@ def extract_activations_from_dataset(model_name: str,
                 text_idx=text_idx
             )
             
+            # Add frequency information to each record
+            for record in text_records:
+                record['ngram_frequency'] = ngram_freq
+                record['frequency_category'] = category
+            
             checkpoint_records.extend(text_records)
         
         print(f"Extracted {len(checkpoint_records)} activation records for checkpoint {checkpoint}")
         all_records.extend(checkpoint_records)
     
     print(f"\nTotal activation records extracted: {len(all_records)}")
+    
+    # Add frequency statistics
+    if ngram_frequencies:
+        frequencies = [r['ngram_frequency'] for r in all_records]
+        print(f"Frequency range: {np.min(frequencies):.4f} - {np.max(frequencies):.4f}")
+        print(f"Mean frequency: {np.mean(frequencies):.4f}")
+    
     return all_records
+
+
+def load_semantic_frequency_datasets(dataset_dir: str = "datasets/semantic_frequency") -> Dict[str, Dict[str, List]]:
+    """
+    Load all semantic frequency datasets for multi-dimensional analysis
+    
+    Args:
+        dataset_dir: Directory containing semantic frequency datasets
+        
+    Returns:
+        Dictionary mapping dataset_name -> dataset_dict
+    """
+    import json
+    from pathlib import Path
+    
+    dataset_path = Path(dataset_dir)
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
+    
+    datasets = {}
+    
+    for json_file in dataset_path.glob("*.json"):
+        dataset_name = json_file.stem
+        
+        try:
+            with open(json_file, 'r') as f:
+                dataset = json.load(f)
+            
+            # Validate dataset structure
+            required_keys = ['texts', 'ngrams']
+            if all(key in dataset for key in required_keys):
+                datasets[dataset_name] = dataset
+                print(f"Loaded {dataset_name}: {len(dataset['texts'])} samples")
+            else:
+                print(f"Skipping {dataset_name}: missing required keys {required_keys}")
+                
+        except Exception as e:
+            print(f"Error loading {json_file}: {e}")
+    
+    print(f"Loaded {len(datasets)} datasets from {dataset_dir}")
+    return datasets
+
+
+def run_checkpoint_analysis_pipeline(model_name: str,
+                                    checkpoints: List[str],
+                                    dataset_names: List[str] = None,
+                                    target_layers: List[int] = None,
+                                    output_dir: str = "cache/checkpoint_analysis") -> str:
+    """
+    Complete pipeline for extracting and analyzing checkpoints across datasets
+    
+    Args:
+        model_name: Model identifier for nnsight
+        checkpoints: List of checkpoint steps to analyze
+        dataset_names: Specific datasets to use (None for all)
+        target_layers: Layers to analyze
+        output_dir: Output directory for results
+        
+    Returns:
+        Path to saved analysis results
+    """
+    from pathlib import Path
+    import pickle
+    from datetime import datetime
+    
+    # Load datasets
+    datasets = load_semantic_frequency_datasets()
+    
+    if dataset_names:
+        datasets = {name: datasets[name] for name in dataset_names if name in datasets}
+    
+    if not datasets:
+        raise ValueError("No valid datasets found")
+    
+    # Default target layers (typical transformer layers)
+    if target_layers is None:
+        target_layers = [2, 4, 6, 8, 10, 12]
+    
+    print(f"=== Checkpoint Analysis Pipeline ===")
+    print(f"Model: {model_name}")
+    print(f"Checkpoints: {checkpoints}")
+    print(f"Datasets: {list(datasets.keys())}")
+    print(f"Target layers: {target_layers}")
+    
+    all_records = []
+    
+    # Process each dataset
+    for dataset_name, dataset in datasets.items():
+        print(f"\n=== Processing Dataset: {dataset_name} ===")
+        
+        dataset_records = extract_activations_from_dataset(
+            model_name=model_name,
+            checkpoints=checkpoints,
+            dataset=dataset,
+            target_layers=target_layers
+        )
+        
+        # Add dataset identifier to records
+        for record in dataset_records:
+            record['dataset_name'] = dataset_name
+        
+        all_records.extend(dataset_records)
+    
+    # Save results
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_file = output_path / f"checkpoint_analysis_{timestamp}.pkl"
+    
+    analysis_metadata = {
+        'model_name': model_name,
+        'checkpoints': checkpoints,
+        'datasets': list(datasets.keys()),
+        'target_layers': target_layers,
+        'n_total_records': len(all_records),
+        'timestamp': timestamp
+    }
+    
+    # Save with metadata
+    save_data = {
+        'records': all_records,
+        'metadata': analysis_metadata
+    }
+    
+    with open(results_file, 'wb') as f:
+        pickle.dump(save_data, f)
+    
+    print(f"\n=== Analysis Complete ===")
+    print(f"Total records extracted: {len(all_records):,}")
+    print(f"Results saved to: {results_file}")
+    
+    return str(results_file)
 
 
 def save_activation_records(records: List[Dict[str, Any]], 
@@ -476,16 +641,3 @@ def analyze_activation_patterns(records: List[Dict[str, Any]]) -> Dict[str, Any]
         analysis['category_analysis'] = category_analysis
     
     return analysis
-
-# Example usage
-def main():
-    """Example usage of simplified checkpoint analysis"""
-    
-    # Example data
-    model_name = "EleutherAI/pythia-70m"
-    checkpoint = "1000"
-    
-    
-
-if __name__ == "__main__":
-    main()

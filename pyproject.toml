@@ -21,6 +21,7 @@ dependencies = [
     "nnsight>=0.4.11",
     "numpy>=2.3.2",
     "pandas>=2.3.1",
+    "scikit-learn>=1.7.1",
     "scipy>=1.16.1",
     "seaborn>=0.13.2",
     "torch>=2.7.1",
