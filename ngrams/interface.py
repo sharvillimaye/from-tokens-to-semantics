@@ -42,7 +42,8 @@ def batch_counts(
     ngrams: List[NGram],
     cutoffs: np.ndarray,
     index: NGramIndex,
-    batch_size: int = 5000
+    batch_size: int = 5000,
+    cutoffs_are_token_counts: bool = False
 ) -> Dict[NGram, np.ndarray]:
     """
     Compute cumulative counts for a list of n-grams across multiple checkpoint cutoffs.
@@ -55,6 +56,7 @@ def batch_counts(
         cutoffs: 1D array of token cutoff values (one per checkpoint).
         index: an NGramIndex backend instance (must be built already).
         batch_size: number of n-grams to process per micro-batch.
+        cutoffs_are_token_counts: flag to determine how cutoff counts should be computed
 
     Returns:
         dict mapping each n-gram to an array of counts (shape = cutoffs.shape).
@@ -62,6 +64,7 @@ def batch_counts(
     results: Dict[NGram, np.ndarray] = {}
     # num_checkpoints = cutoffs.shape[0]
 
+    base = cutoffs - (1 if cutoffs_are_token_counts else 0)
     for start in range(0, len(ngrams), batch_size):
         batch = ngrams[start : start + batch_size]
         # Fetch positions for each n-gram in the batch
@@ -71,7 +74,8 @@ def batch_counts(
         for ng, positions in pos_map.items():
             n = len(ng)
             # adjust cutoffs by (n-1) so end positions <= cutoff
-            end_limits = cutoffs - (n - 1)
+            end_limits = base - (n - 1)
+
             # binary search: count of positions <= each end_limit
 
             positions = np.asarray(positions, dtype=np.int64)

@@ -60,3 +60,15 @@ def test_positions_requires_build():
     idx = InMemoryIndex()
     with pytest.raises(RuntimeError):
         _ = idx.positions((1,))
+
+def test_batch_counts_with_token_counts_flag():
+    # tokens: [1,2,1,2,3,1] => length T=6
+    # token-count cutoffs: [2,4,6]  (not indices)
+    idx = InMemoryIndex(); idx.build_index([1,2,1,2,3,1])
+    res = batch_counts([(1,), (1,2), (1,2,3)],
+                       np.array([2,4,6]),
+                       idx,
+                       cutoffs_are_token_counts=True)
+    assert np.array_equal(res[(1,)],     [1,2,3])
+    assert np.array_equal(res[(1,2)],    [1,2,2])
+    assert np.array_equal(res[(1,2,3)],  [0,0,1])
