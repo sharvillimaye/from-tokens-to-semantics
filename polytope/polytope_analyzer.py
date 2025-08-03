@@ -37,16 +37,27 @@ class PolytopeAnalyzer:
         results = analyzer.analyze_records(activation_records)
     """
     
-    def __init__(self, n_pca_components: float = 0.95, approximation_epsilon: float = 0.05):
+    def __init__(self, n_pca_components: float = 0.95, approximation_epsilon: float = 0.05, random_seed: Optional[int] = None):
         """
         Initialize the analyzer.
         
         Args:
             n_pca_components: Number of PCA components for dimensionality reduction
             approximation_epsilon: Tolerance for polytope approximation
+            random_seed: Random seed for reproducibility (None for random behavior)
         """
         self.n_pca_components = n_pca_components
         self.approximation_epsilon = approximation_epsilon
+        self.random_seed = random_seed
+        
+        # Set random seed if provided
+        if random_seed is not None:
+            np.random.seed(random_seed)
+    
+    def _ensure_random_seed(self):
+        """Ensure random seed is set for reproducible results."""
+        if self.random_seed is not None:
+            np.random.seed(self.random_seed)
     
     def validate_records(self, records: List[Dict]) -> List[Dict]:
         """
@@ -54,12 +65,6 @@ class PolytopeAnalyzer:
         
         Required fields from checkpoint analysis:
         - activation_vector: Neural network activation data (np.ndarray)
-        - ngram_frequency: N-gram frequency value (int/float)
-        
-        Optional fields (with defaults):
-        - layer: Model layer number (defaults to 0)
-        - checkpoint_step: Training checkpoint identifier (defaults to '0')
-        - ngram: N-gram text (defaults to 'unknown')
         
         Args:
             records: List of activation records from checkpoint analysis
@@ -68,7 +73,7 @@ class PolytopeAnalyzer:
             List of validated records compatible with polytope analysis
         """
         validated = []
-        required_fields = ['activation_vector', 'ngram_frequency']
+        required_fields = ['activation_vector']
         
         for i, record in enumerate(records):
             # Check required fields
@@ -166,6 +171,7 @@ class PolytopeAnalyzer:
         if len(extreme_indices) < min(50, n_points // 20):
             remaining_indices = set(range(n_points)) - extreme_indices
             if remaining_indices:
+                self._ensure_random_seed()
                 n_random = min(10, len(remaining_indices))
                 random_indices = np.random.choice(list(remaining_indices), size=n_random, replace=False)
                 extreme_indices.update(random_indices)
@@ -454,6 +460,7 @@ class PolytopeAnalyzer:
         # Sample candidates to evaluate (max 20 for speed)
         n_candidates = min(20, len(R_list))
         if len(R_list) > n_candidates:
+            self._ensure_random_seed()
             candidate_indices = np.random.choice(R_list, size=n_candidates, replace=False)
         else:
             candidate_indices = R_list
@@ -461,6 +468,7 @@ class PolytopeAnalyzer:
         # Sample evaluation points (max 50 for speed)
         n_eval_points = min(50, len(R_list))
         if len(R_list) > n_eval_points:
+            self._ensure_random_seed()
             eval_indices = np.random.choice(R_list, size=n_eval_points, replace=False)
         else:
             eval_indices = R_list
@@ -529,6 +537,7 @@ class PolytopeAnalyzer:
         E_list = list(E)
         n_check = min(20, len(E_list))
         if len(E_list) > n_check:
+            self._ensure_random_seed()
             vertices_to_check = np.random.choice(E_list, size=n_check, replace=False)
         else:
             vertices_to_check = E_list
@@ -590,6 +599,7 @@ class PolytopeAnalyzer:
         R_list = list(R)
         n_check = min(100, len(R_list))
         if len(R_list) > n_check:
+            self._ensure_random_seed()
             points_to_check = np.random.choice(R_list, size=n_check, replace=False)
         else:
             points_to_check = R_list
@@ -617,120 +627,166 @@ class PolytopeAnalyzer:
     
     def compute_volume(self, points: np.ndarray) -> float:
         """
-        Compute polytope volume using approximation methods for high-dimensional data.
+        Compute polytope volume using robust approximation methods for high-dimensional data.
         
         Args:
             points: Input points defining the polytope
             
         Returns:
-            Estimated volume using greedy hull approximation
+            Estimated volume using improved hull approximation
         """
         if len(points) < 2:
             return 0.0
+        
+        n_points, n_dims = points.shape
+        
+        # For very small point sets, use simple volume estimates
+        if n_points < 4:
+            return self._compute_simplex_volume(points)
         
         try:
             # Get approximate hull vertices
             hull_vertex_indices = self.find_hull_vertices(points)
             hull_points = points[hull_vertex_indices]
             
-            # Use Monte Carlo volume estimation with hull approximation
-            return self._approximate_monte_carlo_volume(hull_points)
+            # Use improved Monte Carlo volume estimation
+            return self._robust_monte_carlo_volume(hull_points)
             
         except Exception as e:
-            logger.error(f"Volume computation failed: {e}")
-            return 0.0
+            logger.warning(f"Volume computation failed, using fallback: {e}")
+            return self._compute_bounding_box_volume(points)
     
-    def _approximate_monte_carlo_volume(self, hull_points: np.ndarray, n_samples: int = 10000) -> float:
+    def _compute_simplex_volume(self, points: np.ndarray) -> float:
         """
-        Robust approximate volume using Monte Carlo sampling with hull approximation
+        Compute volume for small point sets using simplex approximation.
+        
+        Args:
+            points: Input points (n_samples <= 3, n_features)
+            
+        Returns:
+            Simplex volume
+        """
+        n_points, n_dims = points.shape
+        
+        if n_points == 1:
+            return 0.0
+        elif n_points == 2:
+            # Line segment length
+            return np.linalg.norm(points[1] - points[0])
+        elif n_points == 3:
+            # Triangle area in any dimension
+            v1 = points[1] - points[0]
+            v2 = points[2] - points[0]
+            # Area = 0.5 * |v1 × v2| (cross product magnitude)
+            cross_prod = np.cross(v1, v2)
+            if np.isscalar(cross_prod):
+                return 0.5 * abs(cross_prod)
+            else:
+                return 0.5 * np.linalg.norm(cross_prod)
+        else:
+            # For more points, use bounding box approximation
+            return self._compute_bounding_box_volume(points)
+    
+    def _compute_bounding_box_volume(self, points: np.ndarray) -> float:
+        """
+        Compute bounding box volume as a fallback method.
+        
+        Args:
+            points: Input points
+            
+        Returns:
+            Bounding box volume
+        """
+        if len(points) < 2:
+            return 0.0
+        
+        min_coords = np.min(points, axis=0)
+        max_coords = np.max(points, axis=0)
+        coord_ranges = max_coords - min_coords
+        
+        # Handle degenerate dimensions
+        non_zero_ranges = coord_ranges[coord_ranges > 1e-12]
+        if len(non_zero_ranges) == 0:
+            return 0.0
+        
+        return np.prod(non_zero_ranges)
+    
+    def _robust_monte_carlo_volume(self, hull_points: np.ndarray, n_samples: int = 10000) -> float:
+        """
+        Improved Monte Carlo volume estimation with better numerical stability.
         
         Args:
             hull_points: Points defining the approximate hull
             n_samples: Number of Monte Carlo samples
             
         Returns:
-            Approximate volume
+            Estimated volume
         """
         if len(hull_points) < 2:
             return 0.0
         
-        try:
-            # Find bounding box
-            min_coords = np.min(hull_points, axis=0)
-            max_coords = np.max(hull_points, axis=0)
-            
-            # Check for degenerate cases
-            coord_ranges = max_coords - min_coords
-            if np.any(coord_ranges <= 1e-12):
-                # Nearly degenerate in some dimensions
-                non_degenerate_dims = np.sum(coord_ranges > 1e-12)
-                if non_degenerate_dims == 0:
-                    return 0.0
-                elif non_degenerate_dims == 1:
-                    # Line-like structure
-                    return np.max(coord_ranges)
-                elif non_degenerate_dims == 2:
-                    # Plane-like structure, estimate area
-                    valid_ranges = coord_ranges[coord_ranges > 1e-12]
-                    return np.prod(valid_ranges) if len(valid_ranges) >= 2 else np.max(valid_ranges)
-            
-            # Volume of bounding box
-            box_volume = np.prod(coord_ranges)
-            
-            if box_volume <= 1e-20:
-                return 0.0
-            
-            # Use multiple estimation methods for robustness
-            volume_estimates = []
-            
-            # Method 1: Standard Monte Carlo with hull approximation
-            try:
-                n_inside = 0
-                sample_batch_size = min(1000, n_samples)
-                
-                for batch_start in range(0, n_samples, sample_batch_size):
-                    batch_size = min(sample_batch_size, n_samples - batch_start)
-                    
-                    # Generate batch of random points
-                    random_points = np.random.uniform(
-                        min_coords, max_coords, size=(batch_size, len(min_coords))
-                    )
-                    
-                    # Check batch of points using hull approximation
-                    for point in random_points:
-                        distance = self.distance_to_approximate_hull(point, hull_points)
-                        if distance <= 1e-6:  # Very small tolerance for "inside"
-                            n_inside += 1
-                
-                volume_ratio = n_inside / n_samples
-                mc_volume = box_volume * volume_ratio
-                volume_estimates.append(mc_volume)
-                
-            except Exception as e:
-                logger.warning(f"Monte Carlo volume estimation failed: {e}")
-            
-            # Method 2: Bounding box scaling estimate for high dimensions
-            try:
-                n_dims = hull_points.shape[1]
-                if n_dims > 0:
-                    # Rough estimate based on point density and dimensionality
-                    density_factor = len(hull_points) / (2 ** min(n_dims, 20))  # Cap at 20 dims
-                    density_volume = box_volume * min(1.0, density_factor)
-                    volume_estimates.append(density_volume)
-            except:
-                pass
-            
-            # Return best estimate
-            if volume_estimates:
-                # Use median of estimates for robustness
-                return float(np.median(volume_estimates))
-            else:
-                # Final fallback: use simple box approximation
-                return box_volume * 0.1  # Conservative estimate
-                
-        except Exception as e:
-            logger.error(f"Volume computation failed: {e}")
+        n_dims = hull_points.shape[1]
+        
+        # Find bounding box
+        min_coords = np.min(hull_points, axis=0)
+        max_coords = np.max(hull_points, axis=0)
+        coord_ranges = max_coords - min_coords
+        
+        # Check for degenerate cases
+        non_degenerate_dims = coord_ranges > 1e-12
+        if not np.any(non_degenerate_dims):
             return 0.0
+        
+        # Volume of effective bounding box
+        effective_ranges = coord_ranges[non_degenerate_dims]
+        if len(effective_ranges) == 0:
+            return 0.0
+        
+        box_volume = np.prod(effective_ranges)
+        
+        if box_volume <= 1e-20:
+            return 0.0
+        
+        # Adaptive sampling based on dimensionality
+        adaptive_samples = min(n_samples, max(1000, 100 * n_dims))
+        
+        # Monte Carlo estimation with batching for memory efficiency
+        n_inside = 0
+        batch_size = min(1000, adaptive_samples)
+        
+        for batch_start in range(0, adaptive_samples, batch_size):
+            current_batch_size = min(batch_size, adaptive_samples - batch_start)
+            
+            # Generate random points
+            self._ensure_random_seed()
+            random_points = np.random.uniform(
+                min_coords, max_coords, size=(current_batch_size, n_dims)
+            )
+            
+            # Check points against hull using vectorized operations where possible
+            for point in random_points:
+                distance = self.distance_to_approximate_hull(point, hull_points)
+                if distance <= 1e-8:  # More strict tolerance for "inside"
+                    n_inside += 1
+        
+        # Estimate volume
+        volume_ratio = n_inside / adaptive_samples
+        estimated_volume = box_volume * volume_ratio
+        
+        return float(estimated_volume)
+    
+    def _approximate_monte_carlo_volume(self, hull_points: np.ndarray, n_samples: int = 10000) -> float:
+        """
+        Legacy method - redirects to robust Monte Carlo volume estimation.
+        
+        Args:
+            hull_points: Points defining the approximate hull
+            n_samples: Number of Monte Carlo samples
+            
+        Returns:
+            Approximate volume using improved method
+        """
+        return self._robust_monte_carlo_volume(hull_points, n_samples)
     
     def compute_surface_area(self, points: np.ndarray) -> float:
         """
@@ -868,19 +924,14 @@ class PolytopeAnalyzer:
         Returns:
             Dictionary with 'high' and 'low' frequency groups
         """
-        frequencies = [r['ngram_frequency'] for r in records]
+        frequency_categories = [r['frequency_categories'] for r in records]
+        # get distinct frequency categories
+        distinct_categories = list(set(frequency_categories))
+        # stratify records by frequency category
+        stratified_records = {cat: [r for r in records if r['frequency_categories'] == cat] for cat in distinct_categories}
+        # should be {'high': [*ngrams], 'low': [*ngrams]}
+        return stratified_records
         
-        if not frequencies:
-            return {'high': [], 'low': []}
-        
-        # Use median as threshold for simple binary split
-        median_freq = np.median(frequencies)
-        
-        high_freq = [r for r in records if r['ngram_frequency'] >= median_freq]
-        low_freq = [r for r in records if r['ngram_frequency'] < median_freq]
-        
-        logger.info(f"Stratified into {len(high_freq)} high-freq and {len(low_freq)} low-freq records")
-        return {'high': high_freq, 'low': low_freq}
     
     def analyze_frequency_group(self, records: List[Dict], group_name: str) -> Dict[str, Any]:
         """
@@ -1200,55 +1251,3 @@ class PolytopeAnalyzer:
                 'frequency_range': np.max(frequencies) - np.min(frequencies)
             }
         }
-
-
-# Example usage function
-def example_usage():
-    """
-    Example of how to use the PolytopeAnalyzer with activation records.
-    """
-    print("Polytope Analyzer - Example Usage")
-    print("=" * 50)
-    
-    # Example activation records structure
-    example_records = [
-        {
-            'activation_vector': np.random.randn(512),  # 512-dim activation
-            'frequency': 150.0,  # High frequency
-            'layer': 6,
-            'checkpoint': 'step_1000',
-            'ngram': 'the cat',
-            'binary_pattern': np.random.rand(512) > 0.7
-        },
-        {
-            'activation_vector': np.random.randn(512),
-            'frequency': 5.0,  # Low frequency  
-            'layer': 6,
-            'checkpoint': 'step_1000',
-            'ngram': 'obscure word',
-            'binary_pattern': np.random.rand(512) > 0.8
-        }
-        # ... more records
-    ]
-    
-    # Initialize analyzer
-    analyzer = PolytopeAnalyzer()
-    
-    # Run analysis
-    # results = analyzer.analyze_records(example_records)
-    
-    print("Example record structure:")
-    for key, value in example_records[0].items():
-        if isinstance(value, np.ndarray):
-            print(f"  {key}: np.ndarray shape {value.shape}")
-        else:
-            print(f"  {key}: {value}")
-    
-    print("\nTo run analysis:")
-    print("  analyzer = PolytopeAnalyzer()")
-    print("  results = analyzer.analyze_records(your_activation_records)")
-    print("  # Results include analysis_results, figures, and summary")
-
-
-if __name__ == "__main__":
-    example_usage()
