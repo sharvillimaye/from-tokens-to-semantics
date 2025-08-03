@@ -17,6 +17,9 @@ from collections import defaultdict
 import warnings
 from pathlib import Path
 
+# Suppress the pad_token warning
+warnings.filterwarnings("ignore", message="Using pad_token, but it is not set yet.")
+
 
 def create_activation_record(checkpoint_step: str,
                            text_idx: int,
@@ -35,12 +38,12 @@ def create_activation_record(checkpoint_step: str,
                            **kwargs) -> Dict[str, Any]:
     """Create a structured activation record as dictionary"""
     
-    # Compute additional metrics
-    threshold: float = -0.1797 # for GPT-NeoX
-    binary_pattern = (activation_vector > threshold).astype(int)
-    sparsity = 1.0 - (np.count_nonzero(activation_vector) / len(activation_vector))
+    # Compute additional metrics with Pythia-appropriate threshold
+    threshold: float = np.std(activation_vector)  # Use std deviation for Pythia models
+    binary_pattern = (np.abs(activation_vector) > threshold).astype(int)
+    sparsity = 1.0 - (np.count_nonzero(binary_pattern) / len(binary_pattern))
     activation_norm = float(np.linalg.norm(activation_vector))
-    n_active_neurons = int(np.count_nonzero(activation_vector))
+    n_active_neurons = int(np.count_nonzero(binary_pattern))
     
     return {
         'checkpoint_step': checkpoint_step,
@@ -199,24 +202,33 @@ def extract_layer_activations(model: LanguageModel,
         Activation vector as numpy array
     """
     try:
-        with model.trace() as tracer:
-            inputs = model.tokenizer(text, return_tensors="pt")
+        # Set pad token if not set
+        if model.tokenizer.pad_token is None:
+            model.tokenizer.pad_token = model.tokenizer.eos_token
+            
+        # Tokenize input first
+        inputs = model.tokenizer(text, return_tensors="pt")
+        
+        with model.trace(inputs):
+            # Forward pass
             output = model(**inputs)
             
-            # Get layer activations
-            layer_output = model.gpt_neox.layers[layer].output[0]
+            # Get layer activations - this will be a proxy during tracing
+            layer_activations = model.gpt_neox.layers[layer].output[0]
             
             # Extract position
             if position == -1:
-                position = layer_output.shape[1] - 1
+                position = layer_activations.shape[1] - 1
             
-            activation_vector = layer_output[0, position, :].detach().cpu().numpy()
-            
-        return activation_vector
+            # Save the specific activation vector we need
+            activation_vector = layer_activations[0, position, :].save()
+        
+        # Access the saved activation vector after trace execution
+        return activation_vector.detach().cpu().numpy()
         
     except Exception as e:
-        warnings.warn(f"Error extracting activations: {e}")
-        return np.array([])
+        raise RuntimeError(f"Failed to extract activations from layer {layer}: {str(e)}. " +
+                         "Cannot proceed without valid activation data.")
 
 
 def extract_activations_for_ngram(model_name: str,
@@ -245,8 +257,12 @@ def extract_activations_for_ngram(model_name: str,
     records = []
     
     try:
-        # Load model at checkpoint
-        model = LanguageModel(model_name, revision=f"step{checkpoint}")
+        # Load model at checkpoint with auto device mapping
+        model = LanguageModel(model_name, revision=f"step{checkpoint}", device_map='auto')
+        
+        # Set pad token to avoid warnings
+        if model.tokenizer.pad_token is None:
+            model.tokenizer.pad_token = model.tokenizer.eos_token
         
         # Find n-gram matches in text
         matches = find_ngram_matches(text, ngram, strategy="comprehensive")
@@ -285,15 +301,16 @@ def extract_activations_for_ngram(model_name: str,
                     records.append(record)
                     
             except Exception as e:
-                warnings.warn(f"Error extracting layer {layer}: {e}")
-                continue
+                raise RuntimeError(f"Failed to extract activations from layer {layer}: {str(e)}. " +
+                                 "Cannot proceed without complete activation data.")
         
         # Clean up model
         del model
         torch.cuda.empty_cache()
         
     except Exception as e:
-        warnings.warn(f"Error loading model {model_name} at step {checkpoint}: {e}")
+        raise RuntimeError(f"Failed to load model {model_name} at checkpoint {checkpoint}: {str(e)}. " +
+                         "Cannot proceed without valid model.")
     
     return records
 
@@ -641,3 +658,30 @@ def analyze_activation_patterns(records: List[Dict[str, Any]]) -> Dict[str, Any]
         analysis['category_analysis'] = category_analysis
     
     return analysis
+
+def main():
+    """Example usage of optimized checkpoint analysis"""
+    model_name = "EleutherAI/pythia-70m"
+    checkpoints=['0', '1', '512', '1000', '10000', '50000', '143000']
+    import json
+    dataset = json.load(open('/content/country_capital_ngram_dataset.json'))
+
+    records = extract_activations_from_dataset(
+        model_name=model_name,
+        checkpoints=checkpoints,
+        dataset=dataset,
+        target_layers=[4]
+    )
+
+    print(f"Extracted {len(records)} activation records")
+
+    # Analyze patterns
+    analysis = analyze_activation_patterns(records)
+    print("\nActivation Analysis:")
+    print(analysis)
+
+    return records
+
+
+if __name__ == "__main__":
+    records = main()

@@ -15,9 +15,13 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Import our simplified modules
-from polytope_metrics import analyze_activation_polytope, analyze_polytope_evolution, plot_polytope_evolution
-from checkpoint_analysis import extract_activations_from_dataset, organize_records_by_key, get_activation_matrix
-from ngram_dataset import build_ngram_dataset, save_dataset, generate_dataset_report
+try:
+    from polytope_metrics import enhanced_run_analysis, create_neurips_figures
+    from checkpoint_analysis import extract_activations_from_dataset, organize_records_by_key, get_activation_matrix
+    from ngram_dataset import build_ngram_dataset, save_dataset, print_dataset_summary
+except ImportError as e:
+    raise RuntimeError(f"Failed to import required modules: {str(e)}. " +
+                     "Ensure all polytope analysis modules are properly installed.")
 
 
 def run_complete_polytope_analysis(model_name: str,
@@ -147,7 +151,7 @@ def run_complete_polytope_analysis(model_name: str,
 def analyze_activation_polytopes(records: List[Dict[str, Any]],
                                frequency_analysis: bool = True) -> Dict[str, Any]:
     """
-    Analyze polytopes across different groupings
+    Analyze polytopes across different groupings using enhanced analysis
     
     Args:
         records: List of activation records
@@ -157,74 +161,25 @@ def analyze_activation_polytopes(records: List[Dict[str, Any]],
         Dictionary with polytope analysis results
     """
     
-    results = {}
+    if not records:
+        raise ValueError("No activation records provided for analysis")
     
-    # Layer-wise analysis
-    print("  Analyzing by layer...")
-    layer_groups = organize_records_by_key(records, 'layer')
-    layer_analysis = {}
+    print("  Running enhanced polytope analysis...")
     
-    for layer, layer_records in layer_groups.items():
-        if len(layer_records) >= 4:  # Minimum points for polytope
-            activations = get_activation_matrix(layer_records)
-            metrics = analyze_activation_polytope(activations)
-            layer_analysis[layer] = {
-                'metrics': metrics,
-                'n_samples': len(layer_records)
-            }
-    
-    results['layer_analysis'] = layer_analysis
-    
-    # Checkpoint evolution analysis
-    print("  Analyzing evolution across checkpoints...")
-    checkpoint_groups = organize_records_by_key(records, 'checkpoint_step')
-    
-    evolution_data = {}
-    for checkpoint, checkpoint_records in checkpoint_groups.items():
-        # Analyze each layer separately
-        checkpoint_layer_groups = organize_records_by_key(checkpoint_records, 'layer')
+    try:
+        # Use the enhanced analysis pipeline from polytope_metrics
+        results = enhanced_run_analysis(
+            records, 
+            target_layers=list(set(r['layer'] for r in records)),
+            checkpoint_selection="adaptive",
+            max_checkpoints=15
+        )
         
-        for layer, layer_records in checkpoint_layer_groups.items():
-            if len(layer_records) >= 4:
-                activations = get_activation_matrix(layer_records)
-                metrics = analyze_activation_polytope(activations)
-                
-                if layer not in evolution_data:
-                    evolution_data[layer] = {}
-                evolution_data[layer][checkpoint] = activations
-    
-    # Compute evolution metrics for each layer
-    evolution_analysis = {}
-    for layer, checkpoint_activations in evolution_data.items():
-        evolution_df = analyze_polytope_evolution(checkpoint_activations)
-        evolution_analysis[layer] = evolution_df
-    
-    results['evolution_analysis'] = evolution_analysis
-    
-    # Frequency-based analysis if requested
-    if frequency_analysis and 'category' in records[0]:
-        print("  Analyzing by frequency category...")
-        category_groups = organize_records_by_key(records, 'category')
-        frequency_analysis_results = {}
+        return results
         
-        for category, category_records in category_groups.items():
-            category_layer_groups = organize_records_by_key(category_records, 'layer')
-            
-            layer_metrics = {}
-            for layer, layer_records in category_layer_groups.items():
-                if len(layer_records) >= 4:
-                    activations = get_activation_matrix(layer_records)
-                    metrics = analyze_activation_polytope(activations)
-                    layer_metrics[layer] = metrics
-            
-            frequency_analysis_results[category] = {
-                'layer_metrics': layer_metrics,
-                'n_samples': len(category_records)
-            }
-        
-        results['frequency_analysis'] = frequency_analysis_results
-    
-    return results
+    except Exception as e:
+        raise RuntimeError(f"Polytope analysis failed: {str(e)}. " +
+                         "Cannot proceed without successful polytope computation.")
 
 
 def generate_analysis_report(results: Dict[str, Any]) -> str:
@@ -509,37 +464,17 @@ def compare_model_polytopes(model_names: List[str],
 def main():
     """Example usage of simplified unified analysis"""
     
-    print("🚀 Running simplified polytope analysis example")
+    print("🚀 Running polytope analysis pipeline")
+    print("⚠️  This pipeline requires:")
+    print("   - Valid model checkpoints")
+    print("   - Real HuggingFace datasets")
+    print("   - Sufficient computational resources")
+    print("   - No fallback mechanisms - will fail if data is invalid")
     
-    try:
-        # Run a small-scale analysis
-        results = run_complete_polytope_analysis(
-            model_name="EleutherAI/pythia-70m",
-            checkpoints=["1000", "2000"],  # Just 2 checkpoints for example
-            n_gram_size=2,
-            pile_samples=100,  # Small sample for testing
-            target_layers=[0, 2],
-            working_dir="./example_polytope_analysis",
-            frequency_analysis=True
-        )
-        
-        # Generate visualizations
-        print("\n📊 Creating visualizations...")
-        figures = create_analysis_visualizations(results)
-        
-        # Export results
-        print("\n💾 Exporting results...")
-        export_paths = export_results_for_analysis(results)
-        
-        print("\n✅ Analysis complete!")
-        print(f"Results in: ./example_polytope_analysis/")
-        
-        return results
-        
-    except Exception as e:
-        print(f"❌ Error in analysis: {e}")
-        print("This might be due to model availability or computational resources.")
-        return None
+    raise NotImplementedError("This pipeline requires real model data and checkpoints. " +
+                            "Please provide valid model_name, checkpoints, and ensure " +
+                            "computational resources are available. " +
+                            "No dummy data fallbacks are provided.")
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ import matplotlib.patches as patches
 from collections import defaultdict
 import warnings
 from pathlib import Path
+import logging
 
 # Optional seaborn import
 try:
@@ -32,6 +33,164 @@ except ImportError:
     sns = None
 
 warnings.filterwarnings('ignore')
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+def validate_activation_records(records: List[Dict]) -> Tuple[List[Dict], Dict[str, Any]]:
+    """
+    Comprehensive validation and preprocessing of activation records
+    
+    Args:
+        records: List of activation records
+        
+    Returns:
+        (validated_records, validation_report)
+    """
+    if not records:
+        return [], {'error': 'No records provided'}
+    
+    validation_report = {
+        'total_input_records': len(records),
+        'validation_errors': [],
+        'warnings': [],
+        'filtered_records': 0,
+        'processed_records': 0
+    }
+    
+    validated_records = []
+    required_fields = ['layer', 'activation_vector', 'activation_norm']
+    
+    for i, record in enumerate(records):
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in record]
+        if missing_fields:
+            validation_report['validation_errors'].append(
+                f"Record {i}: Missing required fields: {missing_fields}"
+            )
+            continue
+        
+        # Validate activation vector
+        activation = record['activation_vector']
+        if not isinstance(activation, np.ndarray):
+            try:
+                activation = np.array(activation)
+                record['activation_vector'] = activation
+            except:
+                validation_report['validation_errors'].append(
+                    f"Record {i}: Invalid activation_vector format"
+                )
+                continue
+        
+        # Check for NaN or infinite values
+        if np.any(np.isnan(activation)) or np.any(np.isinf(activation)):
+            validation_report['validation_errors'].append(
+                f"Record {i}: Activation contains NaN or infinite values"
+            )
+            continue
+        
+        # Check activation norm consistency
+        computed_norm = np.linalg.norm(activation)
+        recorded_norm = record['activation_norm']
+        if abs(computed_norm - recorded_norm) > 1e-6:
+            record['activation_norm'] = computed_norm
+            validation_report['warnings'].append(
+                f"Record {i}: Corrected activation norm mismatch"
+            )
+        
+        # Validate layer
+        if not isinstance(record['layer'], (int, np.integer)):
+            validation_report['validation_errors'].append(
+                f"Record {i}: Layer must be integer"
+            )
+            continue
+        
+        # Add optional fields with defaults
+        if 'ngram_frequency' not in record:
+            record['ngram_frequency'] = 0
+        
+        if 'semantic_category' not in record:
+            record['semantic_category'] = 'unknown'
+        
+        if 'checkpoint_step' not in record:
+            record['checkpoint_step'] = '0'
+        
+        # Calculate additional metrics if missing
+        if 'sparsity' not in record:
+            record['sparsity'] = 1.0 - (np.count_nonzero(activation) / len(activation))
+        
+        if 'n_active_neurons' not in record:
+            record['n_active_neurons'] = int(np.count_nonzero(activation))
+        
+        validated_records.append(record)
+    
+    validation_report['processed_records'] = len(validated_records)
+    validation_report['filtered_records'] = len(records) - len(validated_records)
+    
+    # Log validation results
+    if validation_report['validation_errors']:
+        logger.warning(f"Validation found {len(validation_report['validation_errors'])} errors")
+        for error in validation_report['validation_errors'][:5]:  # Show first 5 errors
+            logger.warning(f"  {error}")
+    
+    if validation_report['warnings']:
+        logger.info(f"Validation corrected {len(validation_report['warnings'])} issues")
+    
+    logger.info(f"Validation: {validation_report['processed_records']}/{validation_report['total_input_records']} records passed")
+    
+    return validated_records, validation_report
+
+
+def preprocess_activation_records(records: List[Dict], 
+                                normalize: bool = False,
+                                remove_outliers: bool = True,
+                                outlier_threshold: float = 3.0) -> List[Dict]:
+    """
+    Preprocess activation records for robust polytope analysis
+    
+    Args:
+        records: Validated activation records
+        normalize: Whether to normalize activation vectors
+        remove_outliers: Whether to remove activation norm outliers
+        outlier_threshold: Z-score threshold for outlier removal
+        
+    Returns:
+        Preprocessed records
+    """
+    if not records:
+        return records
+    
+    processed_records = records.copy()
+    
+    # Remove outliers based on activation norm
+    if remove_outliers:
+        norms = [r['activation_norm'] for r in processed_records]
+        norm_mean = np.mean(norms)
+        norm_std = np.std(norms)
+        
+        if norm_std > 0:
+            z_scores = [(norm - norm_mean) / norm_std for norm in norms]
+            processed_records = [
+                record for record, z_score in zip(processed_records, z_scores)
+                if abs(z_score) <= outlier_threshold
+            ]
+            
+            removed_count = len(records) - len(processed_records)
+            if removed_count > 0:
+                logger.info(f"Removed {removed_count} outlier records (z-score > {outlier_threshold})")
+    
+    # Normalize activation vectors if requested
+    if normalize:
+        for record in processed_records:
+            activation = record['activation_vector']
+            norm = np.linalg.norm(activation)
+            if norm > 0:
+                record['activation_vector'] = activation / norm
+                record['activation_norm'] = 1.0
+    
+    return processed_records
 
 
 def find_extreme_points(points: np.ndarray, n_components: int = 20) -> np.ndarray:
@@ -86,8 +245,8 @@ def find_extreme_points(points: np.ndarray, n_components: int = 20) -> np.ndarra
 
 def distance_to_approximate_hull(point: np.ndarray, hull_points: np.ndarray) -> float:
     """
-    Calculate distance from point to approximate convex hull using optimization
-    Designed for high-dimensional settings
+    Calculate distance from point to approximate convex hull using robust methods
+    Uses QP formulation that's more numerically stable than SLSQP
     
     Args:
         point: Query point
@@ -102,48 +261,76 @@ def distance_to_approximate_hull(point: np.ndarray, hull_points: np.ndarray) -> 
     if n_hull_points == 1:
         return np.linalg.norm(point - hull_points[0])
     
+    # For two points, use line segment distance
+    if n_hull_points == 2:
+        p1, p2 = hull_points[0], hull_points[1]
+        v = p2 - p1
+        w = point - p1
+        
+        # Project point onto line segment
+        t = np.dot(w, v) / (np.dot(v, v) + 1e-12)
+        t = np.clip(t, 0.0, 1.0)  # Clamp to line segment
+        
+        closest_point = p1 + t * v
+        return np.linalg.norm(point - closest_point)
+    
     try:
-        # Minimize ||point - sum(alpha_i * hull_points_i)||^2
-        # subject to sum(alpha_i) = 1, alpha_i >= 0
-        def objective(alpha):
+        # Use more robust approach: find closest point on convex hull
+        # This formulation is more stable than the previous SLSQP approach
+        
+        # Method 1: Try simple distance to closest vertex first
+        vertex_distances = np.linalg.norm(hull_points - point, axis=1)
+        min_vertex_distance = np.min(vertex_distances)
+        
+        # Method 2: Use a robust interior point approach
+        # Find convex combination that minimizes distance
+        from scipy.optimize import minimize
+        
+        def robust_objective(alpha):
+            # Add small regularization to avoid degeneracy
             weighted_sum = np.sum(alpha[:, np.newaxis] * hull_points, axis=0)
-            return np.sum((point - weighted_sum) ** 2)
+            distance_sq = np.sum((point - weighted_sum) ** 2)
+            regularization = 1e-6 * np.sum(alpha ** 2)
+            return distance_sq + regularization
         
-        # Constraints and bounds
-        constraints = [{'type': 'eq', 'fun': lambda alpha: np.sum(alpha) - 1}]
-        bounds = [(0, None) for _ in range(n_hull_points)]
+        # Equality constraint: sum of weights = 1
+        def constraint_eq(alpha):
+            return np.sum(alpha) - 1.0
         
-        # Better initialization: start with closest point
-        distances_to_vertices = np.linalg.norm(hull_points - point, axis=1)
-        closest_idx = np.argmin(distances_to_vertices)
-        alpha0 = np.zeros(n_hull_points)
-        alpha0[closest_idx] = 1.0
+        constraints = [{'type': 'eq', 'fun': constraint_eq}]
+        bounds = [(0.0, 1.0) for _ in range(n_hull_points)]
         
-        # Solve optimization
+        # Better initialization: use barycentric coordinates
+        # Start with uniform distribution
+        alpha0 = np.ones(n_hull_points) / n_hull_points
+        
+        # Try L-BFGS-B which is more robust than SLSQP
         result = minimize(
-            objective, alpha0,
-            method='SLSQP',
+            robust_objective, alpha0,
+            method='L-BFGS-B',
             bounds=bounds,
             constraints=constraints,
-            options={'maxiter': 1000, 'ftol': 1e-9}
+            options={'maxiter': 500, 'ftol': 1e-8}
         )
         
-        if result.success:
-            return np.sqrt(result.fun)
+        if result.success and result.fun >= 0:
+            computed_distance = np.sqrt(result.fun - 1e-6 * np.sum(result.x ** 2))
+            return max(0.0, computed_distance)
         else:
-            # If optimization fails, return distance to closest vertex
-            return np.min(distances_to_vertices)
+            # Fallback to simpler method if optimization fails
+            # Use minimum distance to any vertex as conservative estimate
+            return min_vertex_distance
             
-    except Exception:
-        # Final fallback: distance to closest hull point
-        distances = np.linalg.norm(hull_points - point, axis=1)
-        return np.min(distances)
+    except Exception as e:
+        # Final fallback: return distance to closest vertex
+        vertex_distances = np.linalg.norm(hull_points - point, axis=1)
+        return np.min(vertex_distances)
 
 
 def greedy_hull_approximation(points: np.ndarray, epsilon: float = 0.05, max_iter: int = 1000, 
                              sample_size: int = 2000, verbose: bool = True) -> np.ndarray:
     """
-    Greedy approximation of convex hull for high-dimensional data
+    Enhanced greedy approximation of convex hull for high-dimensional data with robust error handling
     
     Args:
         points: Input points (n_samples, n_features)
@@ -158,72 +345,95 @@ def greedy_hull_approximation(points: np.ndarray, epsilon: float = 0.05, max_ite
     n_points, n_dims = points.shape
     
     if verbose:
-        print(f"Greedy hull approximation: {n_points} points in {n_dims}D, epsilon={epsilon}")
+        logger.info(f"Greedy hull approximation: {n_points} points in {n_dims}D, epsilon={epsilon}")
     
     if n_points <= 3:
         return np.arange(n_points)
     
-    # Initialize with extreme points from PCA
-    hull_indices = set(find_extreme_points_pca(points, n_components=min(30, n_dims)))
-    remaining_indices = set(range(n_points)) - hull_indices
-    
-    if verbose:
-        print(f"Initialized with {len(hull_indices)} extreme points")
-    
-    # Greedy expansion
-    for iteration in range(max_iter):
-        if not remaining_indices:
-            if verbose:
-                print("No more points to add")
-            break
+    try:
+        # Initialize with extreme points from PCA
+        extreme_indices = find_extreme_points(points, n_components=min(30, n_dims))
+        hull_indices = set(extreme_indices)
+        remaining_indices = set(range(n_points)) - hull_indices
         
-        hull_points = points[list(hull_indices)]
+        if verbose:
+            logger.info(f"Initialized with {len(hull_indices)} extreme points")
         
-        # Sample remaining points for efficiency in high dimensions
-        check_indices = list(remaining_indices)
-        if len(check_indices) > sample_size:
-            check_indices = np.random.choice(check_indices, size=sample_size, replace=False)
+        # Greedy expansion with error handling
+        for iteration in range(max_iter):
+            if not remaining_indices:
+                if verbose:
+                    logger.info("No more points to add")
+                break
+            
+            try:
+                hull_points = points[list(hull_indices)]
+                
+                # Sample remaining points for efficiency in high dimensions
+                check_indices = list(remaining_indices)
+                if len(check_indices) > sample_size:
+                    check_indices = np.random.choice(check_indices, size=sample_size, replace=False)
+                
+                # Find point farthest from current hull
+                max_distance = 0.0
+                farthest_idx = None
+                
+                for idx in check_indices:
+                    try:
+                        distance = distance_to_approximate_hull(points[idx], hull_points)
+                        if distance > max_distance:
+                            max_distance = distance
+                            farthest_idx = idx
+                    except Exception as e:
+                        if verbose:
+                            logger.warning(f"Distance calculation failed for point {idx}: {e}")
+                        continue
+                
+                # Check convergence
+                if max_distance <= epsilon:
+                    if verbose:
+                        logger.info(f"Converged at iteration {iteration}: max_distance = {max_distance:.6f}")
+                    break
+                
+                # Add farthest point to hull
+                if farthest_idx is not None:
+                    hull_indices.add(farthest_idx)
+                    remaining_indices.discard(farthest_idx)
+                else:
+                    # No valid farthest point found, break
+                    if verbose:
+                        logger.warning("No valid farthest point found, stopping iteration")
+                    break
+                
+                # Progress reporting
+                if verbose and (iteration + 1) % 100 == 0:
+                    compression_ratio = len(hull_indices) / n_points
+                    logger.info(f"Iteration {iteration + 1}: {len(hull_indices)} vertices "
+                              f"(compression: {compression_ratio:.4f}), max_dist: {max_distance:.6f}")
+                              
+            except Exception as e:
+                if verbose:
+                    logger.error(f"Error in hull approximation iteration {iteration}: {e}")
+                break
         
-        # Find point farthest from current hull
-        max_distance = 0.0
-        farthest_idx = None
+        hull_vertices = np.array(list(hull_indices))
+        final_compression = len(hull_vertices) / n_points
         
-        for idx in check_indices:
-            distance = distance_to_approximate_hull(points[idx], hull_points)
-            if distance > max_distance:
-                max_distance = distance
-                farthest_idx = idx
+        if verbose:
+            logger.info(f"Final approximation: {len(hull_vertices)} vertices "
+                      f"(compression ratio: {final_compression:.4f})")
         
-        # Check convergence
-        if max_distance <= epsilon:
-            if verbose:
-                print(f"Converged at iteration {iteration}: max_distance = {max_distance:.6f}")
-            break
+        return hull_vertices
         
-        # Add farthest point to hull
-        if farthest_idx is not None:
-            hull_indices.add(farthest_idx)
-            remaining_indices.discard(farthest_idx)
-        
-        # Progress reporting
-        if verbose and (iteration + 1) % 100 == 0:
-            compression_ratio = len(hull_indices) / n_points
-            print(f"Iteration {iteration + 1}: {len(hull_indices)} vertices "
-                  f"(compression: {compression_ratio:.4f}), max_dist: {max_distance:.6f}")
-    
-    hull_vertices = np.array(list(hull_indices))
-    final_compression = len(hull_vertices) / n_points
-    
-    if verbose:
-        print(f"Final approximation: {len(hull_vertices)} vertices "
-              f"(compression ratio: {final_compression:.4f})")
-    
-    return hull_vertices
+    except Exception as e:
+        logger.error(f"Critical error in hull approximation: {e}")
+        raise RuntimeError("Hull approximation failed due to numerical or algorithmic issues. " +
+                         "Cannot proceed with unreliable hull approximation.")
 
 
 def compute_approximate_volume(hull_points: np.ndarray, n_samples: int = 10000) -> float:
     """
-    Approximate volume using Monte Carlo sampling within bounding box
+    Robust approximate volume using Monte Carlo sampling with multiple methods
     
     Args:
         hull_points: Points defining the approximate hull
@@ -235,31 +445,94 @@ def compute_approximate_volume(hull_points: np.ndarray, n_samples: int = 10000) 
     if len(hull_points) < 2:
         return 0.0
     
-    # Find bounding box
-    min_coords = np.min(hull_points, axis=0)
-    max_coords = np.max(hull_points, axis=0)
-    
-    # Volume of bounding box
-    box_volume = np.prod(max_coords - min_coords)
-    
-    if box_volume == 0:
-        return 0.0
-    
-    # Monte Carlo sampling
-    n_inside = 0
-    
-    for _ in range(n_samples):
-        # Random point in bounding box
-        random_point = np.random.uniform(min_coords, max_coords)
+    try:
+        # Find bounding box
+        min_coords = np.min(hull_points, axis=0)
+        max_coords = np.max(hull_points, axis=0)
         
-        # Check if inside hull (distance ≈ 0)
-        distance = distance_to_approximate_hull(random_point, hull_points)
-        if distance <= 1e-6:  # Very small tolerance for "inside"
-            n_inside += 1
-    
-    # Estimate volume
-    volume_ratio = n_inside / n_samples
-    return box_volume * volume_ratio
+        # Check for degenerate cases
+        coord_ranges = max_coords - min_coords
+        if np.any(coord_ranges <= 1e-12):
+            # Nearly degenerate in some dimensions
+            non_degenerate_dims = np.sum(coord_ranges > 1e-12)
+            if non_degenerate_dims == 0:
+                return 0.0
+            elif non_degenerate_dims == 1:
+                # Line-like structure
+                return np.max(coord_ranges)
+            elif non_degenerate_dims == 2:
+                # Plane-like structure, estimate area
+                valid_ranges = coord_ranges[coord_ranges > 1e-12]
+                return np.prod(valid_ranges) if len(valid_ranges) >= 2 else np.max(valid_ranges)
+        
+        # Volume of bounding box
+        box_volume = np.prod(coord_ranges)
+        
+        if box_volume <= 1e-20:
+            return 0.0
+        
+        # Use multiple estimation methods for robustness
+        volume_estimates = []
+        
+        # Method 1: Standard Monte Carlo
+        try:
+            n_inside = 0
+            sample_batch_size = min(1000, n_samples)
+            
+            for batch_start in range(0, n_samples, sample_batch_size):
+                batch_size = min(sample_batch_size, n_samples - batch_start)
+                
+                # Generate batch of random points
+                random_points = np.random.uniform(
+                    min_coords, max_coords, size=(batch_size, len(min_coords))
+                )
+                
+                # Check batch of points
+                for point in random_points:
+                    distance = distance_to_approximate_hull(point, hull_points)
+                    if distance <= 1e-6:  # Very small tolerance for "inside"
+                        n_inside += 1
+            
+            volume_ratio = n_inside / n_samples
+            mc_volume = box_volume * volume_ratio
+            volume_estimates.append(mc_volume)
+            
+        except Exception as e:
+            logger.warning(f"Monte Carlo volume estimation failed: {e}")
+        
+        # Method 2: Convex hull volume (fallback for small sets)
+        if len(hull_points) <= 1000:
+            try:
+                from scipy.spatial import ConvexHull
+                hull = ConvexHull(hull_points)
+                if hasattr(hull, 'volume'):
+                    volume_estimates.append(hull.volume)
+            except Exception as e:
+                logger.warning(f"ConvexHull volume failed: {e}")
+        
+        # Method 3: Bounding box scaling estimate
+        try:
+            # Rough estimate based on point density
+            n_dims = hull_points.shape[1]
+            if n_dims > 0:
+                density_factor = len(hull_points) / (2 ** n_dims)  # Rough scaling
+                density_volume = box_volume * min(1.0, density_factor)
+                volume_estimates.append(density_volume)
+        except:
+            pass
+        
+        # Return best estimate
+        if volume_estimates:
+            # Use median of estimates for robustness
+            return float(np.median(volume_estimates))
+        else:
+            raise RuntimeError("All volume estimation methods failed. " +
+                             "Cannot provide reliable volume estimate.")
+            
+    except Exception as e:
+        logger.error(f"Volume computation failed: {e}")
+        raise RuntimeError(f"Volume computation failed: {str(e)}. " +
+                         "Cannot proceed without reliable volume measurement.")
 
 
 def compute_approximate_surface_area(hull_points: np.ndarray, n_samples: int = 5000) -> float:
@@ -452,6 +725,97 @@ def group_by_frequency(records: List[Dict], n_bins: int = 5) -> Dict[str, List[D
         bins[bin_name].append(record)
     
     return dict(bins)
+
+
+def stratify_by_frequency_bins(records: List[Dict], 
+                              high_threshold: float = 75, 
+                              low_threshold: float = 25) -> Dict[str, List[Dict]]:
+    """
+    Robust stratification of activation records by frequency percentiles (high/low)
+    
+    Args:
+        records: List of activation records with 'ngram_frequency' field
+        high_threshold: Percentile threshold for high frequency (default 75th percentile)
+        low_threshold: Percentile threshold for low frequency (default 25th percentile)
+        
+    Returns:
+        Dictionary with 'high' and 'low' frequency groups
+    """
+    frequencies = [r.get('ngram_frequency', 0) for r in records if r.get('ngram_frequency', 0) > 0]
+    
+    if not frequencies:
+        return {'high': [], 'low': records}
+    
+    # Calculate percentile thresholds
+    high_cutoff = np.percentile(frequencies, high_threshold)
+    low_cutoff = np.percentile(frequencies, low_threshold)
+    
+    stratified = {'high': [], 'low': []}
+    
+    for record in records:
+        freq = record.get('ngram_frequency', 0)
+        if freq >= high_cutoff:
+            stratified['high'].append(record)
+        elif freq <= low_cutoff:
+            stratified['low'].append(record)
+        # Records between cutoffs are excluded for cleaner separation
+    
+    return stratified
+
+
+def create_balanced_stratified_sample(records: List[Dict],
+                                    samples_per_stratum: int = 100,
+                                    semantic_balance: bool = True) -> Dict[str, List[Dict]]:
+    """
+    Create balanced samples from high/low frequency strata with optional semantic balancing
+    
+    Args:
+        records: List of activation records
+        samples_per_stratum: Target samples per frequency stratum
+        semantic_balance: Whether to balance across semantic categories
+        
+    Returns:
+        Dictionary with balanced stratified samples
+    """
+    # First stratify by frequency
+    stratified = stratify_by_frequency_bins(records)
+    
+    balanced_sample = {'high': [], 'low': []}
+    
+    for freq_category, freq_records in stratified.items():
+        if not freq_records:
+            continue
+            
+        if semantic_balance and 'semantic_category' in freq_records[0]:
+            # Balance within semantic categories
+            semantic_groups = defaultdict(list)
+            for record in freq_records:
+                semantic_groups[record.get('semantic_category', 'unknown')].append(record)
+            
+            # Sample from each semantic group
+            samples_per_semantic = max(1, samples_per_stratum // len(semantic_groups))
+            
+            for semantic_cat, semantic_records in semantic_groups.items():
+                n_sample = min(samples_per_semantic, len(semantic_records))
+                if n_sample < len(semantic_records):
+                    sampled = np.random.choice(len(semantic_records), n_sample, replace=False)
+                    selected = [semantic_records[i] for i in sampled]
+                else:
+                    selected = semantic_records
+                
+                balanced_sample[freq_category].extend(selected)
+        else:
+            # Simple random sampling
+            n_sample = min(samples_per_stratum, len(freq_records))
+            if n_sample < len(freq_records):
+                sampled = np.random.choice(len(freq_records), n_sample, replace=False)
+                selected = [freq_records[i] for i in sampled]
+            else:
+                selected = freq_records
+            
+            balanced_sample[freq_category] = selected
+    
+    return balanced_sample
 
 
 def analyze_layer_polytopes(records: List[Dict], target_layers: List[int] = None, 
@@ -899,8 +1263,9 @@ def monte_carlo_volume_estimation(points: np.ndarray, n_samples: int = 100000) -
         
         return max(estimated_volume, 0.0)
         
-    except:
-        return 0.0
+    except Exception as e:
+        raise RuntimeError(f"Monte Carlo volume estimation failed: {str(e)}. " +
+                         "Cannot provide reliable volume estimate using Monte Carlo method.")
 
 
 def temporal_evolution_analysis(records: List[Dict], 
@@ -972,10 +1337,9 @@ def temporal_evolution_analysis(records: List[Dict],
             # Compute polytope metrics with fallback
             metrics = compute_polytope_metrics(reduced_activations, use_approximation=True)
             
-            # Add Monte Carlo fallback if needed
-            if metrics['volume'] == 0.0 and metrics['hull_valid'] is False:
-                mc_volume = monte_carlo_volume_estimation(reduced_activations)
-                metrics['mc_volume'] = mc_volume
+            # Check if hull analysis failed
+            if not metrics['hull_valid']:
+                raise RuntimeError("Hull analysis failed. Cannot proceed with unreliable polytope metrics.")
             
             evolution_point = {
                 'checkpoint': checkpoint,
@@ -1000,10 +1364,9 @@ def temporal_evolution_analysis(records: List[Dict],
         reduced_activations, pca_info = reduce_dimensions(activations, n_components=20)
         metrics = compute_polytope_metrics(reduced_activations, use_approximation=True)
         
-        # Add Monte Carlo fallback if needed
-        if metrics['volume'] == 0.0 and metrics['hull_valid'] is False:
-            mc_volume = monte_carlo_volume_estimation(reduced_activations)
-            metrics['mc_volume'] = mc_volume
+        # Check if hull analysis failed
+        if not metrics['hull_valid']:
+            raise RuntimeError("Hull analysis failed. Cannot proceed with unreliable polytope metrics.")
         
         overall_point = {
             'checkpoint': checkpoint,
@@ -1374,6 +1737,374 @@ def bootstrap_confidence_intervals(data: np.ndarray,
     return original_stat, lower_bound, upper_bound
 
 
+def statistical_significance_testing(group1_metrics: Dict[str, float], 
+                                    group2_metrics: Dict[str, float],
+                                    group1_data: np.ndarray = None,
+                                    group2_data: np.ndarray = None,
+                                    alpha: float = 0.05) -> Dict[str, Any]:
+    """
+    Perform statistical significance testing between two groups of polytope metrics
+    
+    Args:
+        group1_metrics: Metrics for first group (e.g., high frequency)
+        group2_metrics: Metrics for second group (e.g., low frequency)  
+        group1_data: Raw data for group 1 (for bootstrap if needed)
+        group2_data: Raw data for group 2 (for bootstrap if needed)
+        alpha: Significance level
+        
+    Returns:
+        Dictionary with statistical test results
+    """
+    significance_results = {}
+    
+    # Metrics to compare
+    common_metrics = set(group1_metrics.keys()) & set(group2_metrics.keys())
+    
+    for metric in common_metrics:
+        try:
+            val1 = group1_metrics[metric]
+            val2 = group2_metrics[metric]
+            
+            # Effect size (Cohen's d equivalent)
+            if val1 != 0 or val2 != 0:
+                effect_size = abs(val1 - val2) / max(abs(val1), abs(val2), 1e-10)
+            else:
+                effect_size = 0.0
+            
+            # Bootstrap-based significance test if data available
+            if group1_data is not None and group2_data is not None:
+                # Bootstrap resampling test
+                n_bootstrap = 1000
+                bootstrap_diffs = []
+                
+                for _ in range(n_bootstrap):
+                    # Resample both groups
+                    if len(group1_data) > 1:
+                        sample1 = np.random.choice(group1_data.flatten(), 
+                                                 size=min(100, len(group1_data)), 
+                                                 replace=True)
+                    else:
+                        sample1 = group1_data.flatten()
+                        
+                    if len(group2_data) > 1:
+                        sample2 = np.random.choice(group2_data.flatten(), 
+                                                 size=min(100, len(group2_data)), 
+                                                 replace=True)
+                    else:
+                        sample2 = group2_data.flatten()
+                    
+                    # Compute metric difference for bootstrap samples
+                    if metric == 'volume':
+                        boot_val1 = compute_approximate_volume(sample1.reshape(-1, 1))
+                        boot_val2 = compute_approximate_volume(sample2.reshape(-1, 1))
+                    else:
+                        boot_val1 = np.mean(sample1)
+                        boot_val2 = np.mean(sample2)
+                    
+                    bootstrap_diffs.append(boot_val1 - boot_val2)
+                
+                # P-value from bootstrap distribution
+                bootstrap_diffs = np.array(bootstrap_diffs)
+                observed_diff = val1 - val2
+                
+                if np.std(bootstrap_diffs) > 0:
+                    # Two-tailed test
+                    p_value = np.mean(np.abs(bootstrap_diffs) >= abs(observed_diff))
+                else:
+                    p_value = 1.0
+                    
+            else:
+                # Simple comparison without formal statistical test
+                p_value = None
+            
+            significance_results[metric] = {
+                'group1_value': val1,
+                'group2_value': val2,
+                'difference': val1 - val2,
+                'effect_size': effect_size,
+                'p_value': p_value,
+                'significant': p_value < alpha if p_value is not None else None,
+                'interpretation': _interpret_effect_size(effect_size)
+            }
+            
+        except Exception as e:
+            logger.warning(f"Statistical testing failed for metric {metric}: {e}")
+            significance_results[metric] = {
+                'error': str(e),
+                'group1_value': group1_metrics.get(metric, 0),
+                'group2_value': group2_metrics.get(metric, 0)
+            }
+    
+    return significance_results
+
+
+def _interpret_effect_size(effect_size: float) -> str:
+    """Interpret effect size magnitude"""
+    if effect_size < 0.2:
+        return 'negligible'
+    elif effect_size < 0.5:
+        return 'small'
+    elif effect_size < 0.8:
+        return 'medium'
+    else:
+        return 'large'
+
+
+def compare_frequency_groups(records: List[Dict], 
+                           stratify_method: str = 'percentile',
+                           statistical_test: bool = True) -> Dict[str, Any]:
+    """
+    Compare polytope metrics between high and low frequency groups with statistical testing
+    
+    Args:
+        records: List of activation records
+        stratify_method: Method for stratification ('percentile' or 'balanced')
+        statistical_test: Whether to perform significance testing
+        
+    Returns:
+        Comprehensive comparison results
+    """
+    logger.info("Comparing high vs low frequency groups")
+    
+    # Validate and preprocess records
+    validated_records, validation_report = validate_activation_records(records)
+    preprocessed_records = preprocess_activation_records(validated_records)
+    
+    if len(preprocessed_records) < 10:
+        return {'error': 'Insufficient valid records for comparison'}
+    
+    # Stratify by frequency
+    if stratify_method == 'balanced':
+        stratified = create_balanced_stratified_sample(preprocessed_records, samples_per_stratum=50)
+    else:
+        stratified = stratify_by_frequency_bins(preprocessed_records)
+    
+    comparison_results = {
+        'validation_report': validation_report,
+        'stratification_method': stratify_method,
+        'group_sizes': {k: len(v) for k, v in stratified.items()},
+        'group_comparisons': {}
+    }
+    
+    # Analyze each frequency group
+    for freq_group, group_records in stratified.items():
+        if len(group_records) < 3:
+            logger.warning(f"Insufficient records in {freq_group} group: {len(group_records)}")
+            continue
+        
+        # Extract activations and compute polytope metrics
+        activations = np.stack([r['activation_vector'] for r in group_records])
+        reduced_activations, pca_info = reduce_dimensions(activations, n_components=20)
+        metrics = compute_polytope_metrics(reduced_activations, use_approximation=True)
+        
+        comparison_results['group_comparisons'][freq_group] = {
+            'metrics': metrics,
+            'n_records': len(group_records),
+            'mean_frequency': np.mean([r['ngram_frequency'] for r in group_records]),
+            'pca_variance_explained': pca_info.get('variance_explained', 0)
+        }
+    
+    # Statistical significance testing
+    if statistical_test and len(comparison_results['group_comparisons']) >= 2:
+        groups = list(comparison_results['group_comparisons'].keys())
+        if 'high' in groups and 'low' in groups:
+            high_metrics = comparison_results['group_comparisons']['high']['metrics']
+            low_metrics = comparison_results['group_comparisons']['low']['metrics']
+            
+            # Get raw data for bootstrap testing
+            high_records = stratified['high']
+            low_records = stratified['low']
+            high_activations = np.stack([r['activation_vector'] for r in high_records])
+            low_activations = np.stack([r['activation_vector'] for r in low_records])
+            
+            significance_results = statistical_significance_testing(
+                high_metrics, low_metrics, high_activations, low_activations
+            )
+            
+            comparison_results['statistical_significance'] = significance_results
+    
+    return comparison_results
+
+
+def process_records_in_batches(records: List[Dict], 
+                             batch_size: int = 1000,
+                             analysis_function: callable = None) -> List[Any]:
+    """
+    Memory-efficient batch processing for large datasets
+    
+    Args:
+        records: List of activation records
+        batch_size: Size of each processing batch
+        analysis_function: Function to apply to each batch
+        
+    Returns:
+        List of batch analysis results
+    """
+    if analysis_function is None:
+        analysis_function = lambda batch: compute_polytope_metrics(
+            np.stack([r['activation_vector'] for r in batch]), use_approximation=True
+        )
+    
+    batch_results = []
+    n_batches = (len(records) + batch_size - 1) // batch_size
+    
+    logger.info(f"Processing {len(records)} records in {n_batches} batches of size {batch_size}")
+    
+    for i in range(0, len(records), batch_size):
+        batch = records[i:i + batch_size]
+        logger.info(f"Processing batch {i//batch_size + 1}/{n_batches}")
+        
+        try:
+            batch_result = analysis_function(batch)
+            batch_results.append(batch_result)
+        except Exception as e:
+            logger.error(f"Batch {i//batch_size + 1} failed: {e}")
+            batch_results.append({'error': str(e), 'batch_size': len(batch)})
+    
+    return batch_results
+
+
+def robust_polytope_analysis_pipeline(records: List[Dict],
+                                     use_validation: bool = True,
+                                     use_preprocessing: bool = True,
+                                     use_stratification: bool = True,
+                                     use_statistical_testing: bool = True,
+                                     batch_processing: bool = False,
+                                     batch_size: int = 1000) -> Dict[str, Any]:
+    """
+    Complete robust polytope analysis pipeline with all enhancements
+    
+    Args:
+        records: List of activation records
+        use_validation: Enable record validation
+        use_preprocessing: Enable record preprocessing  
+        use_stratification: Enable frequency stratification
+        use_statistical_testing: Enable significance testing
+        batch_processing: Use batch processing for large datasets
+        batch_size: Batch size for processing
+        
+    Returns:
+        Comprehensive analysis results
+    """
+    logger.info("=== Starting Robust Polytope Analysis Pipeline ===")
+    
+    pipeline_results = {
+        'pipeline_config': {
+            'use_validation': use_validation,
+            'use_preprocessing': use_preprocessing,
+            'use_stratification': use_stratification,
+            'use_statistical_testing': use_statistical_testing,
+            'batch_processing': batch_processing,
+            'batch_size': batch_size
+        },
+        'input_records': len(records)
+    }
+    
+    # Step 1: Validation
+    if use_validation:
+        logger.info("Step 1: Validating activation records")
+        validated_records, validation_report = validate_activation_records(records)
+        pipeline_results['validation'] = validation_report
+    else:
+        validated_records = records
+        pipeline_results['validation'] = {'skipped': True}
+    
+    if len(validated_records) == 0:
+        return {'error': 'No valid records after validation', **pipeline_results}
+    
+    # Step 2: Preprocessing
+    if use_preprocessing:
+        logger.info("Step 2: Preprocessing activation records")
+        processed_records = preprocess_activation_records(validated_records)
+        pipeline_results['preprocessing'] = {
+            'records_before': len(validated_records),
+            'records_after': len(processed_records)
+        }
+    else:
+        processed_records = validated_records
+        pipeline_results['preprocessing'] = {'skipped': True}
+    
+    # Step 3: Stratification and comparison
+    if use_stratification:
+        logger.info("Step 3: Frequency stratification and comparison")
+        comparison_results = compare_frequency_groups(
+            processed_records, 
+            statistical_test=use_statistical_testing
+        )
+        pipeline_results['frequency_comparison'] = comparison_results
+    else:
+        pipeline_results['frequency_comparison'] = {'skipped': True}
+    
+    # Step 4: Layer-wise analysis
+    logger.info("Step 4: Layer-wise polytope analysis")
+    if batch_processing and len(processed_records) > batch_size:
+        # Group by layer for batch processing
+        layer_groups = defaultdict(list)
+        for record in processed_records:
+            layer_groups[record['layer']].append(record)
+        
+        layer_analysis = {}
+        for layer, layer_records in layer_groups.items():
+            if len(layer_records) < 3:
+                continue
+                
+            logger.info(f"Analyzing layer {layer} with {len(layer_records)} records")
+            if len(layer_records) > batch_size:
+                batch_results = process_records_in_batches(layer_records, batch_size)
+                # Combine batch results (simplified)
+                layer_analysis[layer] = {
+                    'batch_results': batch_results,
+                    'n_batches': len(batch_results),
+                    'total_records': len(layer_records)
+                }
+            else:
+                # Process normally
+                activations = np.stack([r['activation_vector'] for r in layer_records])
+                reduced_activations, pca_info = reduce_dimensions(activations, n_components=20)
+                metrics = compute_polytope_metrics(reduced_activations, use_approximation=True)
+                layer_analysis[layer] = {
+                    'metrics': metrics,
+                    'n_records': len(layer_records),
+                    'pca_info': pca_info
+                }
+    else:
+        # Standard layer analysis
+        layer_analysis = analyze_layer_polytopes(processed_records, use_approximation=True)
+    
+    pipeline_results['layer_analysis'] = layer_analysis
+    
+    # Step 5: Summary statistics
+    logger.info("Step 5: Computing summary statistics")
+    summary_stats = {}
+    
+    if use_stratification and 'frequency_comparison' in pipeline_results:
+        freq_comp = pipeline_results['frequency_comparison']
+        if 'group_comparisons' in freq_comp:
+            summary_stats['frequency_groups'] = {
+                group: {
+                    'n_records': data['n_records'],
+                    'mean_frequency': data['mean_frequency'],
+                    'volume': data['metrics'].get('volume', 0),
+                    'effective_dimension': data['metrics'].get('effective_dimension', 0)
+                }
+                for group, data in freq_comp['group_comparisons'].items()
+            }
+        
+        if 'statistical_significance' in freq_comp:
+            significant_metrics = [
+                metric for metric, test_result in freq_comp['statistical_significance'].items()
+                if test_result.get('significant', False)
+            ]
+            summary_stats['significant_differences'] = significant_metrics
+    
+    pipeline_results['summary_statistics'] = summary_stats
+    
+    logger.info("=== Polytope Analysis Pipeline Complete ===")
+    logger.info(f"Processed {len(processed_records)} records across {len(layer_analysis)} layers")
+    
+    return pipeline_results
+
+
 def enhanced_run_analysis(records: List[Dict], 
                         target_layers: List[int] = None,
                         checkpoint_selection: str = "adaptive",
@@ -1502,69 +2233,12 @@ def enhanced_run_analysis(records: List[Dict],
 
 # Example usage
 if __name__ == "__main__":
-    # Create synthetic data for testing the enhanced analysis
-    print("Creating synthetic test data for enhanced analysis...")
+    print("🔍 Enhanced Polytope Metrics for Multi-Dimensional Analysis")
+    print("⚠️  This analysis requires:")
+    print("   - Real activation records from valid model checkpoints")
+    print("   - Sufficient computational resources for polytope computation")
+    print("   - No synthetic data fallbacks - will fail with invalid data")
     
-    np.random.seed(42)
-    test_records = []
-    
-    # Simulate multiple checkpoints and layers
-    checkpoints = ['100', '500', '1000', '2000', '3000', '5000', '8000', '10000']
-    layers = [2, 4, 6, 8, 10, 12]
-    
-    for checkpoint in checkpoints:
-        checkpoint_num = int(checkpoint)
-        
-        for layer in layers:
-            # Layer and checkpoint dependent patterns
-            layer_scale = 0.5 + layer * 0.1
-            checkpoint_scale = 0.8 + (checkpoint_num / 10000) * 0.4
-            
-            n_samples = 50  # Records per layer per checkpoint
-            
-            for i in range(n_samples):
-                # Create activation with realistic patterns
-                activation = np.random.randn(768) * layer_scale * checkpoint_scale
-                
-                # Add some structure to activations
-                if layer > 6:  # Later layers more structured
-                    activation[:100] *= 2.0  # Amplify some dimensions
-                
-                # Frequency patterns (higher frequency = more structured)
-                freq = np.random.exponential(1.0) * (layer / 6.0)
-                
-                record = {
-                    'checkpoint_step': checkpoint,
-                    'layer': layer,
-                    'activation_vector': activation,
-                    'activation_norm': np.linalg.norm(activation),
-                    'ngram_frequency': freq,
-                    'sparsity': 1.0 - (np.count_nonzero(activation) / len(activation)),
-                    'n_active_neurons': int(np.count_nonzero(activation))
-                }
-                test_records.append(record)
-    
-    print(f"Created {len(test_records):,} synthetic records")
-    print(f"Checkpoints: {checkpoints}")
-    print(f"Layers: {layers}")
-    
-    # Run enhanced analysis
-    results = enhanced_run_analysis(
-        test_records, 
-        target_layers=[4, 6, 8, 10], 
-        checkpoint_selection="adaptive",
-        max_checkpoints=10
-    )
-    
-    print("\n=== Final Analysis Summary ===")
-    summary = results['analysis_summary']
-    print(f"Records analyzed: {summary['n_records']:,}")
-    print(f"Checkpoints: {summary['n_checkpoints']}")
-    print(f"Layers: {summary['n_layers']}")
-    print(f"Primary layer: {summary['primary_layer']}")
-    print(f"Figures: {summary['figures_generated']}")
-    
-    if 'volume_evolution' in results['summary_statistics']:
-        vol_stats = results['summary_statistics']['volume_evolution']
-        print(f"\nVolume evolution trend: {vol_stats['trend_correlation']:.3f}")
-        print(f"Mean volume: {vol_stats['mean']:.6f} [{vol_stats['ci_lower']:.6f}, {vol_stats['ci_upper']:.6f}]")
+    raise NotImplementedError("This polytope analysis requires real activation data from model checkpoints. " +
+                            "Provide valid activation records with proper layer, checkpoint, and frequency information. " +
+                            "No synthetic data fallbacks are provided - analysis must use real neural activations.")
