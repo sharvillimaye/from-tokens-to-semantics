@@ -226,6 +226,46 @@ def _find_comprehensive_matches(text: str, ngram: str) -> List[Tuple[int, int, f
     return unique_matches[:5]  # Return top 5 matches
 
 
+def _get_model_layers(model: LanguageModel) -> Any:
+    """Get the layers attribute for different model architectures"""
+    # Try different model architectures
+    for attr_path in ['gpt_neox.layers', 'transformer.h', 'model.layers', 'layers']:
+        try:
+            layers = model
+            for attr in attr_path.split('.'):
+                layers = getattr(layers, attr)
+            return layers
+        except AttributeError:
+            continue
+    
+    raise RuntimeError(f"Could not find layers in model architecture. "
+                      f"Model type: {type(model).__name__}")
+
+
+def _get_precise_token_position(tokenizer, text: str, char_position: int) -> int:
+    """Get precise token position for character position using offset mapping"""
+    try:
+        # Tokenize with offset mapping
+        encoding = tokenizer(text, return_offsets_mapping=True, return_tensors="pt")
+        offset_mapping = encoding['offset_mapping'][0]  # Remove batch dimension
+        
+        # Find token that contains the character position
+        for token_idx, (start_char, end_char) in enumerate(offset_mapping):
+            if start_char <= char_position < end_char:
+                return token_idx
+            elif start_char > char_position:
+                # Character position is before this token, return previous
+                return max(0, token_idx - 1)
+        
+        # If we didn't find it, return last token position
+        return len(offset_mapping) - 1
+        
+    except Exception:
+        # Fallback to approximate method if offset mapping fails
+        tokens = tokenizer(text[:char_position], return_tensors="pt")
+        return max(0, tokens['input_ids'].shape[1] - 1)
+
+
 def extract_layer_activations(model: LanguageModel,
                             text: str,
                             layer: int,
@@ -254,8 +294,9 @@ def extract_layer_activations(model: LanguageModel,
             # Forward pass
             _ = model(**inputs)
             
-            # Get layer activations - this will be a proxy during tracing
-            layer_activations = model.gpt_neox.layers[layer].output[0]
+            # Get layer activations - architecture agnostic
+            model_layers = _get_model_layers(model)
+            layer_activations = model_layers[layer].output[0]
             
             # Extract position
             if position == -1:
@@ -314,9 +355,8 @@ def extract_activations_for_ngram(model_name: str,
         # Use best match
         char_start, char_end, confidence, matched_text = matches[0]
         
-        # Get token position (approximate)
-        tokens = model.tokenizer(text[:char_start], return_tensors="pt")
-        token_position = tokens['input_ids'].shape[1] - 1
+        # Get precise token position using offset mapping
+        token_position = _get_precise_token_position(model.tokenizer, text, char_start)
         
         # Extract activations from each target layer
         for layer in target_layers:

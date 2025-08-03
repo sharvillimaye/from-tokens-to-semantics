@@ -87,21 +87,6 @@ class PolytopeAnalyzer:
                 logger.warning(f"Record {i} has invalid activation vector format, skipping")
                 continue
             
-            # Add default fields if missing
-            if 'layer' not in record:
-                record['layer'] = 0
-            if 'checkpoint_step' not in record:
-                record['checkpoint_step'] = '0'
-            if 'ngram' not in record:
-                record['ngram'] = 'unknown'
-            if 'binary_pattern' not in record:
-                record['binary_pattern'] = np.zeros_like(activation, dtype=bool)
-            
-            # Compute derived metrics
-            record['activation_norm'] = np.linalg.norm(activation)
-            record['sparsity'] = 1.0 - (np.count_nonzero(activation) / len(activation))
-            record['n_active_neurons'] = int(np.count_nonzero(activation))
-            
             validated.append(record)
         
         logger.info(f"Validated {len(validated)}/{len(records)} records")
