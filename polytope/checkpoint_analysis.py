@@ -14,12 +14,53 @@ from difflib import SequenceMatcher
 import json
 from tqdm import tqdm
 from collections import defaultdict
-import warnings
 from pathlib import Path
 
-# Suppress the pad_token warning
-warnings.filterwarnings("ignore", message="Using pad_token, but it is not set yet.")
-
+def compute_cett_threshold(activation_vector: np.ndarray, 
+                          target_cett: float = 0.01) -> float:
+    """
+    Compute CETT-based threshold for activation vector
+    
+    Args:
+        activation_vector: Neural activation vector
+        target_cett: Target CETT value (0.01 = 1% error tolerance)
+    
+    Returns:
+        Optimal threshold value
+    """
+    # Sort activations by magnitude
+    magnitudes = np.abs(activation_vector)
+    sorted_indices = np.argsort(magnitudes)
+    sorted_magnitudes = magnitudes[sorted_indices]
+    
+    # Compute FFN total output norm (denominator)
+    total_norm = np.linalg.norm(activation_vector)
+    
+    if total_norm == 0:
+        return 0.0
+    
+    # Binary search for optimal threshold
+    left, right = 0, len(sorted_magnitudes) - 1
+    best_threshold = 0.0
+    
+    while left <= right:
+        mid = (left + right) // 2
+        threshold = sorted_magnitudes[mid]
+        
+        # Compute CETT for this threshold
+        below_threshold_mask = magnitudes < threshold
+        tail_activations = activation_vector * below_threshold_mask
+        tail_norm = np.linalg.norm(tail_activations)
+        
+        current_cett = tail_norm / total_norm
+        
+        if current_cett <= target_cett:
+            best_threshold = threshold
+            left = mid + 1
+        else:
+            right = mid - 1
+    
+    return best_threshold
 
 def create_activation_record(checkpoint_step: str,
                            text_idx: int,
@@ -38,12 +79,12 @@ def create_activation_record(checkpoint_step: str,
                            **kwargs) -> Dict[str, Any]:
     """Create a structured activation record as dictionary"""
     
-    # Compute additional metrics with Pythia-appropriate threshold
-    threshold: float = np.std(activation_vector)  # Use std deviation for Pythia models
-    binary_pattern = (np.abs(activation_vector) > threshold).astype(int)
-    sparsity = 1.0 - (np.count_nonzero(binary_pattern) / len(binary_pattern))
-    activation_norm = float(np.linalg.norm(activation_vector))
-    n_active_neurons = int(np.count_nonzero(binary_pattern))
+    # binary pattern based on CETT-PPL-1% threshold
+    cett_threshold = compute_cett_threshold(activation_vector, 0.01)
+    binary_pattern = (np.abs(activation_vector) > cett_threshold).astype(int)
+    sparsity = np.sum(binary_pattern) / len(binary_pattern)
+    activation_norm = np.linalg.norm(activation_vector)
+    n_active_neurons = np.sum(binary_pattern)
     
     return {
         'checkpoint_step': checkpoint_step,
@@ -211,7 +252,7 @@ def extract_layer_activations(model: LanguageModel,
         
         with model.trace(inputs):
             # Forward pass
-            output = model(**inputs)
+            _ = model(**inputs)
             
             # Get layer activations - this will be a proxy during tracing
             layer_activations = model.gpt_neox.layers[layer].output[0]
@@ -347,15 +388,6 @@ def extract_activations_from_dataset(model_name: str,
     print(f"Dataset size: {total_texts} samples")
     print(f"Target layers: {target_layers}")
     
-    # Compute n-gram frequencies if available
-    ngram_frequencies = {}
-    if 'frequency_categories' in dataset:
-        unique_ngrams = list(set(dataset['ngrams']))
-        for ngram in unique_ngrams:
-            # Count occurrences (simple frequency estimation)
-            count = dataset['ngrams'].count(ngram)
-            ngram_frequencies[ngram] = count / len(dataset['ngrams'])
-    
     for checkpoint_idx, checkpoint in enumerate(checkpoints):
         print(f"\nProcessing checkpoint {checkpoint_idx+1}/{len(checkpoints)}: step{checkpoint}")
         
@@ -365,13 +397,6 @@ def extract_activations_from_dataset(model_name: str,
             text = dataset['texts'][text_idx]
             ngram = dataset['ngrams'][text_idx]
             category = dataset.get('frequency_categories', ['unknown'])[text_idx] if 'frequency_categories' in dataset else "unknown"
-            
-            # Get n-gram frequency
-            ngram_freq = ngram_frequencies.get(ngram, 0.0)
-            
-            # Apply frequency threshold if specified
-            if frequency_threshold is not None and ngram_freq < frequency_threshold:
-                continue
             
             # Extract activations for this text/ngram combination
             text_records = extract_activations_for_ngram(
@@ -384,23 +409,12 @@ def extract_activations_from_dataset(model_name: str,
                 text_idx=text_idx
             )
             
-            # Add frequency information to each record
-            for record in text_records:
-                record['ngram_frequency'] = ngram_freq
-                record['frequency_category'] = category
-            
             checkpoint_records.extend(text_records)
         
         print(f"Extracted {len(checkpoint_records)} activation records for checkpoint {checkpoint}")
         all_records.extend(checkpoint_records)
     
     print(f"\nTotal activation records extracted: {len(all_records)}")
-    
-    # Add frequency statistics
-    if ngram_frequencies:
-        frequencies = [r['ngram_frequency'] for r in all_records]
-        print(f"Frequency range: {np.min(frequencies):.4f} - {np.max(frequencies):.4f}")
-        print(f"Mean frequency: {np.mean(frequencies):.4f}")
     
     return all_records
 
