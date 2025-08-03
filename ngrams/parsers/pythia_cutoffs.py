@@ -2,11 +2,11 @@
 Canonical Pythia checkpoint → token cutoff mapping.
 
 Facts from the official Pythia docs:
-- Models expose **154 checkpoints**: steps {0,1,2,4,8,16,32,64,128,256,512,1000} plus every 1,000 up to 143,000.
-- Effective **tokens per step = 2,097,152 (2^21)** for the unified step naming on Hugging Face.
-- Thus token cutoff at step *s* is ``s * 2_097_152`` tokens.
+- Models expose 154 checkpoints: steps {0,1,2,4,8,16,32,64,128,256,512,1000} plus every 1,000 up to 143,000.
+- Effective tokens per step = 2,097,152 (2^21) for the unified step naming on Hugging Face.
+- Thus token cutoff at step s is s * 2_097_152 tokens.
 
-These conventions apply to the v1 suite and to v0 checkpoints as *renamed* on HF for
+These conventions apply to the v1 suite and to v0 checkpoints as renamed on HF for
 consistency (see Pythia README notes). If you parse step names from HF revisions (e.g.,
 "step3000"), you can recover the same cutoffs via the helpers below.
 """
