@@ -856,21 +856,6 @@ class PolytopeAnalyzer:
         Returns:
             Dictionary of polytope metrics
         """
-        n_points, n_dims = points.shape
-        
-        if n_points < 2:
-            return {
-                'volume': 0.0,
-                'surface_area': 0.0,
-                'n_vertices': n_points,
-                'n_facets': 0,
-                'mean_distance': 0.0,
-                'std_distance': 0.0,
-                'centroid_variance': 0.0,
-                'effective_dimension': 0.0,
-                'hull_valid': False
-            }
-        
         try:
             # Find hull vertices
             hull_indices = self.find_hull_vertices(points)
@@ -898,6 +883,22 @@ class PolytopeAnalyzer:
             else:
                 effective_dim = 0.0
             
+            # Boundary density (ratio of hull vertices to total points)
+            boundary_density = len(hull_indices) / len(points)
+            
+            # Inter-polytope distance (distance from centroid to hull boundary)
+            inter_polytope_distance = self.distance_to_approximate_hull(centroid, hull_points)
+            
+            # Geometric regularity (coefficient of variation of hull vertex distances)
+            if len(hull_points) > 1:
+                hull_distances = pdist(hull_points)
+                if len(hull_distances) > 0 and np.mean(hull_distances) > 0:
+                    geometric_regularity = np.std(hull_distances) / np.mean(hull_distances)
+                else:
+                    geometric_regularity = 0.0
+            else:
+                geometric_regularity = 0.0
+            
             return {
                 'volume': float(volume),
                 'surface_area': float(surface_area),
@@ -907,6 +908,9 @@ class PolytopeAnalyzer:
                 'std_distance': float(std_distance),
                 'centroid_variance': float(centroid_variance),
                 'effective_dimension': float(effective_dim),
+                'boundary_density': float(boundary_density),
+                'inter_polytope_distance': float(inter_polytope_distance),
+                'geometric_regularity': float(geometric_regularity),
                 'hull_valid': True
             }
             
@@ -1010,35 +1014,93 @@ class PolytopeAnalyzer:
             
             # Compare groups if both exist
             if 'high' in checkpoint_results and 'low' in checkpoint_results:
-                high_vol = checkpoint_results['high']['polytope_metrics']['volume']
-                low_vol = checkpoint_results['low']['polytope_metrics']['volume']
+                high_metrics = checkpoint_results['high']['polytope_metrics']
+                low_metrics = checkpoint_results['low']['polytope_metrics']
+                high_stats = checkpoint_results['high']['activation_stats']
+                low_stats = checkpoint_results['low']['activation_stats']
                 
                 comparison = {
-                    'volume_ratio_high_to_low': high_vol / low_vol if low_vol > 1e-10 else float('inf'),
-                    'volume_difference': high_vol - low_vol,
-                    'sparsity_difference': (
-                        checkpoint_results['low']['activation_stats']['mean_sparsity'] -
-                        checkpoint_results['high']['activation_stats']['mean_sparsity']
-                    ),
-                    'norm_ratio': (
-                        checkpoint_results['high']['activation_stats']['mean_norm'] /
-                        checkpoint_results['low']['activation_stats']['mean_norm']
-                        if checkpoint_results['low']['activation_stats']['mean_norm'] > 0 else 1.0
-                    )
+                    # Volume metrics
+                    'volume_ratio_high_to_low': high_metrics['volume'] / low_metrics['volume'] if low_metrics['volume'] > 1e-10 else float('inf'),
+                    'volume_difference': high_metrics['volume'] - low_metrics['volume'],
+                    
+                    # Surface area metrics
+                    'surface_area_ratio_high_to_low': high_metrics['surface_area'] / low_metrics['surface_area'] if low_metrics['surface_area'] > 1e-10 else float('inf'),
+                    'surface_area_difference': high_metrics['surface_area'] - low_metrics['surface_area'],
+                    
+                    # Boundary metrics
+                    'boundary_density_ratio': high_metrics['boundary_density'] / low_metrics['boundary_density'] if low_metrics['boundary_density'] > 1e-10 else float('inf'),
+                    'boundary_density_difference': high_metrics['boundary_density'] - low_metrics['boundary_density'],
+                    
+                    # Distance metrics
+                    'inter_polytope_distance_ratio': high_metrics['inter_polytope_distance'] / low_metrics['inter_polytope_distance'] if low_metrics['inter_polytope_distance'] > 1e-10 else float('inf'),
+                    'inter_polytope_distance_difference': high_metrics['inter_polytope_distance'] - low_metrics['inter_polytope_distance'],
+                    
+                    # Regularity metrics
+                    'geometric_regularity_ratio': high_metrics['geometric_regularity'] / low_metrics['geometric_regularity'] if low_metrics['geometric_regularity'] > 1e-10 else float('inf'),
+                    'geometric_regularity_difference': high_metrics['geometric_regularity'] - low_metrics['geometric_regularity'],
+                    
+                    # Dimension metrics
+                    'effective_dimension_ratio': high_metrics['effective_dimension'] / low_metrics['effective_dimension'] if low_metrics['effective_dimension'] > 1e-10 else float('inf'),
+                    'effective_dimension_difference': high_metrics['effective_dimension'] - low_metrics['effective_dimension'],
+                    
+                    # Vertex count metrics
+                    'n_vertices_ratio': high_metrics['n_vertices'] / low_metrics['n_vertices'] if low_metrics['n_vertices'] > 0 else float('inf'),
+                    'n_vertices_difference': high_metrics['n_vertices'] - low_metrics['n_vertices'],
+                    
+                    # Distance spread metrics
+                    'mean_distance_ratio': high_metrics['mean_distance'] / low_metrics['mean_distance'] if low_metrics['mean_distance'] > 1e-10 else float('inf'),
+                    'std_distance_ratio': high_metrics['std_distance'] / low_metrics['std_distance'] if low_metrics['std_distance'] > 1e-10 else float('inf'),
+                    
+                    # Centroid metrics
+                    'centroid_variance_ratio': high_metrics['centroid_variance'] / low_metrics['centroid_variance'] if low_metrics['centroid_variance'] > 1e-10 else float('inf'),
+                    'centroid_variance_difference': high_metrics['centroid_variance'] - low_metrics['centroid_variance'],
+                    
+                    # Activation stats (original metrics)
+                    'sparsity_difference': low_stats['mean_sparsity'] - high_stats['mean_sparsity'],
+                    'norm_ratio': high_stats['mean_norm'] / low_stats['mean_norm'] if low_stats['mean_norm'] > 0 else 1.0
                 }
                 checkpoint_results['comparison'] = comparison
             
             results['checkpoint_analysis'][checkpoint] = checkpoint_results
         
-        # Compute evolution metrics
+        # Compute evolution metrics for all polytope metrics
         evolution_data = []
         for checkpoint, data in results['checkpoint_analysis'].items():
             if 'comparison' in data:
+                comp = data['comparison']
                 evolution_point = {
                     'checkpoint': checkpoint,
-                    'volume_ratio': data['comparison']['volume_ratio_high_to_low'],
-                    'sparsity_difference': data['comparison']['sparsity_difference'],
-                    'norm_ratio': data['comparison']['norm_ratio']
+                    # Volume evolution
+                    'volume_ratio': comp['volume_ratio_high_to_low'],
+                    'volume_difference': comp['volume_difference'],
+                    # Surface area evolution  
+                    'surface_area_ratio': comp['surface_area_ratio_high_to_low'],
+                    'surface_area_difference': comp['surface_area_difference'],
+                    # Boundary evolution
+                    'boundary_density_ratio': comp['boundary_density_ratio'],
+                    'boundary_density_difference': comp['boundary_density_difference'],
+                    # Distance evolution
+                    'inter_polytope_distance_ratio': comp['inter_polytope_distance_ratio'],
+                    'inter_polytope_distance_difference': comp['inter_polytope_distance_difference'],
+                    # Regularity evolution
+                    'geometric_regularity_ratio': comp['geometric_regularity_ratio'],
+                    'geometric_regularity_difference': comp['geometric_regularity_difference'],
+                    # Dimension evolution
+                    'effective_dimension_ratio': comp['effective_dimension_ratio'],
+                    'effective_dimension_difference': comp['effective_dimension_difference'],
+                    # Vertex evolution
+                    'n_vertices_ratio': comp['n_vertices_ratio'],
+                    'n_vertices_difference': comp['n_vertices_difference'],
+                    # Distance spread evolution
+                    'mean_distance_ratio': comp['mean_distance_ratio'],
+                    'std_distance_ratio': comp['std_distance_ratio'],
+                    # Centroid evolution
+                    'centroid_variance_ratio': comp['centroid_variance_ratio'],
+                    'centroid_variance_difference': comp['centroid_variance_difference'],
+                    # Original activation stats
+                    'sparsity_difference': comp['sparsity_difference'],
+                    'norm_ratio': comp['norm_ratio']
                 }
                 evolution_data.append(evolution_point)
         
@@ -1048,7 +1110,7 @@ class PolytopeAnalyzer:
     
     def create_visualizations(self, analysis_results: Dict[str, Any], save_dir: str = "./polytope_plots") -> Dict[str, plt.Figure]:
         """
-        Create visualizations of the analysis results.
+        Create comprehensive visualizations of all polytope analysis results.
         
         Args:
             analysis_results: Results from compare_across_checkpoints
@@ -1057,65 +1119,158 @@ class PolytopeAnalyzer:
         Returns:
             Dictionary of matplotlib figures
         """
+        if not PLOTTING_AVAILABLE:
+            logger.warning("Plotting libraries not available, skipping visualizations")
+            return {}
+            
         save_dir = Path(save_dir)
         save_dir.mkdir(exist_ok=True)
         
         figures = {}
         
-        # Plot 1: Volume comparison across checkpoints
-        if analysis_results['evolution_metrics']:
-            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+        if not analysis_results['evolution_metrics']:
+            logger.warning("No evolution metrics found, skipping visualizations")
+            return figures
             
-            evolution_df = pd.DataFrame(analysis_results['evolution_metrics'])
-            
-            # Volume ratio evolution
-            ax1.plot(evolution_df['checkpoint'], evolution_df['volume_ratio'], 'o-', linewidth=2, markersize=8)
-            ax1.set_title('Volume Ratio (High/Low Frequency)', fontweight='bold')
-            ax1.set_xlabel('Checkpoint')
-            ax1.set_ylabel('Volume Ratio')
-            ax1.grid(True, alpha=0.3)
-            ax1.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal volumes')
-            ax1.legend()
-            
-            # Sparsity difference evolution
-            ax2.plot(evolution_df['checkpoint'], evolution_df['sparsity_difference'], 's-', linewidth=2, markersize=8, color='orange')
-            ax2.set_title('Sparsity Difference (Low - High)', fontweight='bold')
-            ax2.set_xlabel('Checkpoint')
-            ax2.set_ylabel('Sparsity Difference')
-            ax2.grid(True, alpha=0.3)
-            ax2.axhline(y=0, color='red', linestyle='--', alpha=0.5, label='Equal sparsity')
-            ax2.legend()
-            
-            # Norm ratio evolution
-            ax3.plot(evolution_df['checkpoint'], evolution_df['norm_ratio'], '^-', linewidth=2, markersize=8, color='green')
-            ax3.set_title('Norm Ratio (High/Low Frequency)', fontweight='bold')
-            ax3.set_xlabel('Checkpoint')
-            ax3.set_ylabel('Norm Ratio')
-            ax3.grid(True, alpha=0.3)
-            ax3.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal norms')
-            ax3.legend()
-            
-            # Summary metrics heatmap
-            checkpoint_names = [str(cp) for cp in evolution_df['checkpoint']]
-            metrics_matrix = np.array([
-                evolution_df['volume_ratio'].values,
-                evolution_df['sparsity_difference'].values,
-                evolution_df['norm_ratio'].values
-            ])
-            
-            im = ax4.imshow(metrics_matrix, aspect='auto', cmap='viridis')
-            ax4.set_xticks(range(len(checkpoint_names)))
-            ax4.set_xticklabels(checkpoint_names)
-            ax4.set_yticks(range(3))
-            ax4.set_yticklabels(['Volume Ratio', 'Sparsity Diff', 'Norm Ratio'])
-            ax4.set_title('Metrics Evolution Heatmap', fontweight='bold')
-            plt.colorbar(im, ax=ax4)
-            
-            plt.tight_layout()
-            figures['evolution_summary'] = fig
-            fig.savefig(save_dir / 'evolution_summary.png', dpi=300, bbox_inches='tight')
+        evolution_df = pd.DataFrame(analysis_results['evolution_metrics'])
         
-        # Plot 2: Detailed checkpoint comparison
+        # Plot 1: Core Polytope Metrics Evolution
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        
+        # Volume evolution
+        ax1.plot(evolution_df['checkpoint'], evolution_df['volume_ratio'], 'o-', linewidth=2, markersize=8, color='blue')
+        ax1.set_title('Volume Ratio Evolution (High/Low Frequency)', fontweight='bold')
+        ax1.set_xlabel('Checkpoint')
+        ax1.set_ylabel('Volume Ratio')
+        ax1.grid(True, alpha=0.3)
+        ax1.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal volumes')
+        ax1.legend()
+        ax1.set_yscale('log')
+        
+        # Surface area evolution
+        ax2.plot(evolution_df['checkpoint'], evolution_df['surface_area_ratio'], 's-', linewidth=2, markersize=8, color='orange')
+        ax2.set_title('Surface Area Ratio Evolution (High/Low)', fontweight='bold')
+        ax2.set_xlabel('Checkpoint')
+        ax2.set_ylabel('Surface Area Ratio')
+        ax2.grid(True, alpha=0.3)
+        ax2.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal surface areas')
+        ax2.legend()
+        ax2.set_yscale('log')
+        
+        # Boundary density evolution
+        ax3.plot(evolution_df['checkpoint'], evolution_df['boundary_density_ratio'], '^-', linewidth=2, markersize=8, color='green')
+        ax3.set_title('Boundary Density Ratio Evolution (High/Low)', fontweight='bold')
+        ax3.set_xlabel('Checkpoint')
+        ax3.set_ylabel('Boundary Density Ratio')
+        ax3.grid(True, alpha=0.3)
+        ax3.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal density')
+        ax3.legend()
+        
+        # Geometric regularity evolution
+        ax4.plot(evolution_df['checkpoint'], evolution_df['geometric_regularity_ratio'], 'd-', linewidth=2, markersize=8, color='purple')
+        ax4.set_title('Geometric Regularity Ratio Evolution (High/Low)', fontweight='bold')
+        ax4.set_xlabel('Checkpoint')
+        ax4.set_ylabel('Regularity Ratio')
+        ax4.grid(True, alpha=0.3)
+        ax4.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal regularity')
+        ax4.legend()
+        
+        plt.tight_layout()
+        figures['core_metrics_evolution'] = fig
+        fig.savefig(save_dir / 'core_metrics_evolution.png', dpi=300, bbox_inches='tight')
+        
+        # Plot 2: Distance and Dimension Metrics
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        
+        # Inter-polytope distance evolution
+        ax1.plot(evolution_df['checkpoint'], evolution_df['inter_polytope_distance_ratio'], 'o-', linewidth=2, markersize=8, color='brown')
+        ax1.set_title('Inter-Polytope Distance Ratio (High/Low)', fontweight='bold')
+        ax1.set_xlabel('Checkpoint')
+        ax1.set_ylabel('Distance Ratio')
+        ax1.grid(True, alpha=0.3)
+        ax1.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal distances')
+        ax1.legend()
+        
+        # Effective dimension evolution
+        ax2.plot(evolution_df['checkpoint'], evolution_df['effective_dimension_ratio'], 's-', linewidth=2, markersize=8, color='teal')
+        ax2.set_title('Effective Dimension Ratio (High/Low)', fontweight='bold')
+        ax2.set_xlabel('Checkpoint')
+        ax2.set_ylabel('Dimension Ratio')
+        ax2.grid(True, alpha=0.3)
+        ax2.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal dimensions')
+        ax2.legend()
+        
+        # Number of vertices evolution
+        ax3.plot(evolution_df['checkpoint'], evolution_df['n_vertices_ratio'], '^-', linewidth=2, markersize=8, color='navy')
+        ax3.set_title('Number of Vertices Ratio (High/Low)', fontweight='bold')
+        ax3.set_xlabel('Checkpoint')
+        ax3.set_ylabel('Vertices Ratio')
+        ax3.grid(True, alpha=0.3)
+        ax3.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal vertices')
+        ax3.legend()
+        
+        # Centroid variance evolution
+        ax4.plot(evolution_df['checkpoint'], evolution_df['centroid_variance_ratio'], 'd-', linewidth=2, markersize=8, color='crimson')
+        ax4.set_title('Centroid Variance Ratio (High/Low)', fontweight='bold')
+        ax4.set_xlabel('Checkpoint')
+        ax4.set_ylabel('Variance Ratio')
+        ax4.grid(True, alpha=0.3)
+        ax4.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Equal variance')
+        ax4.legend()
+        
+        plt.tight_layout()
+        figures['distance_dimension_metrics'] = fig
+        fig.savefig(save_dir / 'distance_dimension_metrics.png', dpi=300, bbox_inches='tight')
+        
+        # Plot 3: Comprehensive Heatmap of All Metrics
+        ratio_metrics = [
+            'volume_ratio', 'surface_area_ratio', 'boundary_density_ratio',
+            'inter_polytope_distance_ratio', 'geometric_regularity_ratio',
+            'effective_dimension_ratio', 'n_vertices_ratio', 'centroid_variance_ratio',
+            'mean_distance_ratio', 'std_distance_ratio', 'norm_ratio'
+        ]
+        
+        ratio_labels = [
+            'Volume', 'Surface Area', 'Boundary Density',
+            'Inter-Polytope Dist', 'Geometric Regularity',
+            'Effective Dimension', 'Vertices Count', 'Centroid Variance',
+            'Mean Distance', 'Std Distance', 'Activation Norm'
+        ]
+        
+        # Create heatmap data
+        heatmap_data = []
+        for metric in ratio_metrics:
+            if metric in evolution_df.columns:
+                heatmap_data.append(evolution_df[metric].values)
+            else:
+                heatmap_data.append(np.ones(len(evolution_df)))  # fallback
+                
+        heatmap_matrix = np.array(heatmap_data)
+        
+        fig, ax = plt.subplots(1, 1, figsize=(14, 10))
+        im = ax.imshow(np.log10(np.maximum(heatmap_matrix, 1e-6)), aspect='auto', cmap='RdBu_r', vmin=-2, vmax=2)
+        
+        ax.set_xticks(range(len(evolution_df)))
+        ax.set_xticklabels([f"CP{cp}" for cp in evolution_df['checkpoint']], rotation=45)
+        ax.set_yticks(range(len(ratio_labels)))
+        ax.set_yticklabels(ratio_labels)
+        ax.set_title('Polytope Metrics Evolution Heatmap\n(Log10 of High/Low Ratios)', fontweight='bold', pad=20)
+        
+        cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+        cbar.set_label('Log10(High/Low Ratio)', rotation=270, labelpad=20)
+        
+        # Add text annotations for significant values
+        for i in range(len(ratio_labels)):
+            for j in range(len(evolution_df)):
+                if abs(np.log10(heatmap_matrix[i, j])) > 0.3:  # Only annotate significant differences
+                    text = f"{heatmap_matrix[i, j]:.2f}"
+                    ax.text(j, i, text, ha="center", va="center", color="white", fontweight='bold')
+        
+        plt.tight_layout()
+        figures['comprehensive_heatmap'] = fig
+        fig.savefig(save_dir / 'comprehensive_heatmap.png', dpi=300, bbox_inches='tight')
+        
+        # Plot 4: Detailed Comparison by Group
         checkpoint_data = []
         for checkpoint, data in analysis_results['checkpoint_analysis'].items():
             for group in ['high', 'low']:
@@ -1128,7 +1283,12 @@ class PolytopeAnalyzer:
                         'frequency_group': group,
                         'volume': metrics['volume'],
                         'surface_area': metrics['surface_area'],
+                        'boundary_density': metrics['boundary_density'],
+                        'inter_polytope_distance': metrics['inter_polytope_distance'],
+                        'geometric_regularity': metrics['geometric_regularity'],
                         'effective_dimension': metrics['effective_dimension'],
+                        'n_vertices': metrics['n_vertices'],
+                        'centroid_variance': metrics['centroid_variance'],
                         'mean_sparsity': stats['mean_sparsity'],
                         'mean_norm': stats['mean_norm']
                     })
@@ -1136,34 +1296,47 @@ class PolytopeAnalyzer:
         if checkpoint_data:
             df = pd.DataFrame(checkpoint_data)
             
-            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+            # Create subplot grid for all metrics
+            fig, axes = plt.subplots(3, 4, figsize=(20, 15))
             axes = axes.flatten()
             
-            metrics = ['volume', 'surface_area', 'effective_dimension', 'mean_sparsity', 'mean_norm']
+            detailed_metrics = [
+                'volume', 'surface_area', 'boundary_density', 'inter_polytope_distance',
+                'geometric_regularity', 'effective_dimension', 'n_vertices', 'centroid_variance',
+                'mean_sparsity', 'mean_norm'
+            ]
             
-            for i, metric in enumerate(metrics):
+            colors = {'high': 'red', 'low': 'blue'}
+            markers = {'high': 'o', 'low': 's'}
+            
+            for i, metric in enumerate(detailed_metrics):
                 if i < len(axes):
                     for group in ['high', 'low']:
                         group_data = df[df['frequency_group'] == group]
                         if not group_data.empty:
                             axes[i].plot(group_data['checkpoint'], group_data[metric], 
-                                       'o-', label=f'{group.title()} Frequency', linewidth=2, markersize=8)
+                                       marker=markers[group], color=colors[group],
+                                       label=f'{group.title()} Frequency', linewidth=2, markersize=6)
                     
                     axes[i].set_title(f'{metric.replace("_", " ").title()}', fontweight='bold')
                     axes[i].set_xlabel('Checkpoint')
                     axes[i].set_ylabel(metric.replace("_", " ").title())
                     axes[i].legend()
                     axes[i].grid(True, alpha=0.3)
+                    
+                    # Use log scale for metrics with large ranges
+                    if metric in ['volume', 'surface_area', 'n_vertices']:
+                        axes[i].set_yscale('log')
             
-            # Remove empty subplot
-            if len(metrics) < len(axes):
-                fig.delaxes(axes[-1])
+            # Remove empty subplots
+            for i in range(len(detailed_metrics), len(axes)):
+                fig.delaxes(axes[i])
             
             plt.tight_layout()
-            figures['detailed_comparison'] = fig
-            fig.savefig(save_dir / 'detailed_comparison.png', dpi=300, bbox_inches='tight')
+            figures['detailed_metrics_comparison'] = fig
+            fig.savefig(save_dir / 'detailed_metrics_comparison.png', dpi=300, bbox_inches='tight')
         
-        logger.info(f"Created {len(figures)} visualization plots in {save_dir}")
+        logger.info(f"Created {len(figures)} comprehensive visualization plots in {save_dir}")
         return figures
     
     def analyze_records(self, records: List[Dict]) -> Dict[str, Any]:
@@ -1211,8 +1384,6 @@ class PolytopeAnalyzer:
         """Generate analysis summary."""
         # Basic statistics
         frequencies = [r['ngram_frequency'] for r in records]
-        sparsities = [r['sparsity'] for r in records]
-        norms = [r['activation_norm'] for r in records]
         
         # Frequency-based statistics
         median_freq = np.median(frequencies)
