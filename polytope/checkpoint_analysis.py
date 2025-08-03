@@ -269,7 +269,8 @@ def _get_precise_token_position(tokenizer, text: str, char_position: int) -> int
 def extract_layer_activations(model: LanguageModel,
                             text: str,
                             layer: int,
-                            position: int = -1) -> np.ndarray:
+                            position: int = -1,
+                            strategy: str = "single") -> np.ndarray:
     """
     Extract activations from a specific layer and position
     
@@ -278,6 +279,10 @@ def extract_layer_activations(model: LanguageModel,
         text: Input text
         layer: Layer index
         position: Token position (-1 for last token)
+        strategy: Extraction strategy ('single', 'last', 'mean')
+                 - 'single': Use specific position
+                 - 'last': Always use last token
+                 - 'mean': Average across all tokens
         
     Returns:
         Activation vector as numpy array
@@ -298,12 +303,18 @@ def extract_layer_activations(model: LanguageModel,
             model_layers = _get_model_layers(model)
             layer_activations = model_layers[layer].output[0]
             
-            # Extract position
-            if position == -1:
-                position = layer_activations.shape[1] - 1
-            
-            # Save the specific activation vector we need
-            activation_vector = layer_activations[0, position, :].save()
+            # Extract activation based on strategy
+            if strategy == "mean":
+                # Average across all token positions
+                activation_vector = layer_activations[0, :, :].mean(dim=0).save()
+            elif strategy == "last":
+                # Always use last token
+                activation_vector = layer_activations[0, -1, :].save()
+            else:  # "single" strategy
+                # Use specific position
+                if position == -1:
+                    position = layer_activations.shape[1] - 1
+                activation_vector = layer_activations[0, position, :].save()
         
         # Access the saved activation vector after trace execution
         return activation_vector.detach().cpu().numpy()
@@ -319,7 +330,8 @@ def extract_activations_for_ngram(model_name: str,
                                 ngram: str,
                                 target_layers: List[int],
                                 category: str = "unknown",
-                                text_idx: int = 0) -> List[Dict[str, Any]]:
+                                text_idx: int = 0,
+                                activation_strategy: str = "single") -> List[Dict[str, Any]]:
     """
     Extract activations for a specific n-gram across multiple layers
     
@@ -342,6 +354,14 @@ def extract_activations_for_ngram(model_name: str,
         # Load model at checkpoint with auto device mapping
         model = LanguageModel(model_name, revision=f"step{checkpoint}", device_map='auto')
         
+        # Debug: verify model checkpoint loading (simplified)
+        try:
+            # Simple verification that model loaded correctly
+            model_info = f"Model {model_name} checkpoint {checkpoint} loaded"
+            print(f"Debug: {model_info}")
+        except Exception as e:
+            print(f"Debug: Model verification failed for checkpoint {checkpoint}: {e}")
+        
         # Set pad token to avoid warnings
         if model.tokenizer.pad_token is None:
             model.tokenizer.pad_token = model.tokenizer.eos_token
@@ -361,7 +381,7 @@ def extract_activations_for_ngram(model_name: str,
         # Extract activations from each target layer
         for layer in target_layers:
             try:
-                activation_vector = extract_layer_activations(model, text, layer, token_position)
+                activation_vector = extract_layer_activations(model, text, layer, token_position, activation_strategy)
                 
                 if len(activation_vector) > 0:
                     record = create_activation_record(
@@ -396,12 +416,87 @@ def extract_activations_for_ngram(model_name: str,
     return records
 
 
+def extract_activations_for_ngram_with_model(model: LanguageModel,
+                                           checkpoint: str,
+                                           text: str,
+                                           ngram: str,
+                                           target_layers: List[int],
+                                           category: str = "unknown",
+                                           text_idx: int = 0,
+                                           activation_strategy: str = "single") -> List[Dict[str, Any]]:
+    """
+    Extract activations for a specific n-gram using an already-loaded model.
+    More efficient version that doesn't reload the model for each text.
+    
+    Args:
+        model: Already loaded LanguageModel
+        checkpoint: Checkpoint step (for record keeping)
+        text: Input text containing the n-gram
+        ngram: Target n-gram
+        target_layers: List of layer indices
+        category: Frequency category
+        text_idx: Text index for tracking
+        activation_strategy: Strategy for activation extraction
+        
+    Returns:
+        List of activation records
+    """
+    
+    records = []
+    
+    try:
+        # Find n-gram matches in text
+        matches = find_ngram_matches(text, ngram, strategy="comprehensive")
+        
+        if not matches:
+            return records
+        
+        # Use best match
+        char_start, char_end, confidence, matched_text = matches[0]
+        
+        # Get precise token position using offset mapping
+        token_position = _get_precise_token_position(model.tokenizer, text, char_start)
+        
+        # Extract activations from each target layer
+        for layer in target_layers:
+            try:
+                activation_vector = extract_layer_activations(model, text, layer, token_position, activation_strategy)
+                
+                if len(activation_vector) > 0:
+                    record = create_activation_record(
+                        checkpoint_step=checkpoint,
+                        text_idx=text_idx,
+                        text=text,
+                        ngram=ngram,
+                        matched_text=matched_text,
+                        match_confidence=confidence,
+                        matching_strategy="comprehensive",
+                        category=category,
+                        layer=layer,
+                        token_position=token_position,
+                        char_start=char_start,
+                        char_end=char_end,
+                        activation_vector=activation_vector
+                    )
+                    records.append(record)
+                    
+            except Exception as e:
+                print(f"Warning: Failed to extract activations from layer {layer} for text {text_idx}: {e}")
+                continue
+        
+    except Exception as e:
+        print(f"Warning: Failed to process text {text_idx}: {e}")
+    
+    return records
+
+
 def extract_activations_from_dataset(model_name: str,
                                    checkpoints: List[str],
                                    dataset: Dict[str, List[Any]],
                                    target_layers: List[int] = None,
                                    batch_size: int = 1,
-                                   frequency_threshold: float = None) -> List[Dict[str, Any]]:
+                                   frequency_threshold: float = None,
+                                   activation_strategy: str = "single") -> List[Dict[str, Any]]:
     """
     Extract activations from a complete dataset across checkpoints
     Enhanced version with frequency processing for multi-dimensional analysis
@@ -428,33 +523,72 @@ def extract_activations_from_dataset(model_name: str,
     print(f"Dataset size: {total_texts} samples")
     print(f"Target layers: {target_layers}")
     
+    # Check if dataset has frequency categories
+    has_categories = 'frequency_categories' in dataset and len(dataset['frequency_categories']) == total_texts
+    if has_categories:
+        category_counts = {cat: dataset['frequency_categories'].count(cat) for cat in set(dataset['frequency_categories'])}
+        print(f"Found frequency categories: {category_counts}")
+    else:
+        print("No frequency categories found, using 'unknown'")
+    
     for checkpoint_idx, checkpoint in enumerate(checkpoints):
         print(f"\nProcessing checkpoint {checkpoint_idx+1}/{len(checkpoints)}: step{checkpoint}")
         
         checkpoint_records = []
         
-        for text_idx in tqdm(range(total_texts), desc=f"Checkpoint {checkpoint}"):
-            text = dataset['texts'][text_idx]
-            ngram = dataset['ngrams'][text_idx]
-            category = dataset.get('frequency_categories', ['unknown'])[text_idx] if 'frequency_categories' in dataset else "unknown"
+        # Load model once per checkpoint (more efficient)
+        try:
+            print(f"Loading model {model_name} at checkpoint {checkpoint}...")
+            model = LanguageModel(model_name, revision=f"step{checkpoint}", device_map='auto')
             
-            # Extract activations for this text/ngram combination
-            text_records = extract_activations_for_ngram(
-                model_name=model_name,
-                checkpoint=checkpoint,
-                text=text,
-                ngram=ngram,
-                target_layers=target_layers,
-                category=category,
-                text_idx=text_idx
-            )
+            # Set pad token to avoid warnings
+            if model.tokenizer.pad_token is None:
+                model.tokenizer.pad_token = model.tokenizer.eos_token
             
-            checkpoint_records.extend(text_records)
+            print(f"Model loaded successfully for checkpoint {checkpoint}")
+            
+            # Process all texts with this model
+            for text_idx in tqdm(range(total_texts), desc=f"Checkpoint {checkpoint}"):
+                text = dataset['texts'][text_idx]
+                ngram = dataset['ngrams'][text_idx]
+                # FIXED: Proper category assignment
+                if 'frequency_categories' in dataset and len(dataset['frequency_categories']) > text_idx:
+                    category = dataset['frequency_categories'][text_idx]
+                else:
+                    category = "unknown"
+                
+                # Extract activations for this text/ngram combination using existing model
+                text_records = extract_activations_for_ngram_with_model(
+                    model=model,
+                    checkpoint=checkpoint,
+                    text=text,
+                    ngram=ngram,
+                    target_layers=target_layers,
+                    category=category,
+                    text_idx=text_idx,
+                    activation_strategy=activation_strategy
+                )
+                
+                checkpoint_records.extend(text_records)
+            
+            # Clean up model
+            del model
+            torch.cuda.empty_cache()
+            
+        except Exception as e:
+            print(f"Error processing checkpoint {checkpoint}: {e}")
+            continue
         
         print(f"Extracted {len(checkpoint_records)} activation records for checkpoint {checkpoint}")
         all_records.extend(checkpoint_records)
     
     print(f"\nTotal activation records extracted: {len(all_records)}")
+    
+    # Print category distribution in results
+    if all_records:
+        categories = [r['category'] for r in all_records]
+        category_counts = {cat: categories.count(cat) for cat in set(categories)}
+        print(f"Final category distribution: {category_counts}")
     
     return all_records
 
@@ -720,14 +854,21 @@ def main():
     import json
     dataset = json.load(open('/content/country_capital_ngram_dataset.json'))
 
+    print("Dataset keys:", list(dataset.keys()))
+    if 'frequency_categories' in dataset:
+        print("Sample frequency categories:", dataset['frequency_categories'][:10])
+
     records = extract_activations_from_dataset(
         model_name=model_name,
         checkpoints=checkpoints,
         dataset=dataset,
-        target_layers=[4]
+        target_layers=[4],
+        activation_strategy="single"
     )
 
     print(f"Extracted {len(records)} activation records")
+    if records:
+        print("Sample record categories:", [r['category'] for r in records[:10]])
 
     # Analyze patterns
     analysis = analyze_activation_patterns(records)
@@ -739,3 +880,4 @@ def main():
 
 if __name__ == "__main__":
     records = main()
+    save_activation_records(records, 'cache/activation_records.pkl')

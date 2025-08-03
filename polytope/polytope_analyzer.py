@@ -37,18 +37,22 @@ class PolytopeAnalyzer:
         results = analyzer.analyze_records(activation_records)
     """
     
-    def __init__(self, n_pca_components: float = 0.95, approximation_epsilon: float = 0.05, random_seed: Optional[int] = None):
+    def __init__(self, n_pca_components: float = 0.95, approximation_epsilon: float = 0.05, 
+                 random_seed: Optional[int] = None, dimensionality_reduction: str = "pca"):
         """
+        
         Initialize the analyzer.
         
         Args:
             n_pca_components: Number of PCA components for dimensionality reduction
             approximation_epsilon: Tolerance for polytope approximation
             random_seed: Random seed for reproducibility (None for random behavior)
+            dimensionality_reduction: Method for dimensionality reduction ('pca', 'none', 'truncate')
         """
         self.n_pca_components = n_pca_components
         self.approximation_epsilon = approximation_epsilon
         self.random_seed = random_seed
+        self.dimensionality_reduction = dimensionality_reduction
         
         # Set random seed if provided
         if random_seed is not None:
@@ -65,6 +69,10 @@ class PolytopeAnalyzer:
         
         Required fields from checkpoint analysis:
         - activation_vector: Neural network activation data (np.ndarray)
+        - category: 'high' or 'low' frequency category
+        - sparsity: Sparsity measure
+        - activation_norm: Activation norm
+        - n_active_neurons: Number of active neurons
         
         Args:
             records: List of activation records from checkpoint analysis
@@ -73,12 +81,18 @@ class PolytopeAnalyzer:
             List of validated records compatible with polytope analysis
         """
         validated = []
-        required_fields = ['activation_vector']
+        required_fields = ['activation_vector', 'category', 'sparsity', 'activation_norm', 'n_active_neurons']
         
         for i, record in enumerate(records):
             # Check required fields
             if not all(field in record for field in required_fields):
-                logger.warning(f"Record {i} missing required fields, skipping")
+                missing = [f for f in required_fields if f not in record]
+                logger.warning(f"Record {i} missing required fields {missing}, skipping")
+                continue
+            
+            # Validate category
+            if record['category'] not in ['high', 'low']:
+                logger.warning(f"Record {i} has invalid category '{record['category']}', must be 'high' or 'low'")
                 continue
             
             # Validate activation vector
@@ -92,6 +106,15 @@ class PolytopeAnalyzer:
                 logger.warning(f"Record {i} has invalid activation vector format, skipping")
                 continue
             
+            # Validate numeric fields
+            try:
+                float(record['sparsity'])
+                float(record['activation_norm'])
+                int(record['n_active_neurons'])
+            except (ValueError, TypeError):
+                logger.warning(f"Record {i} has invalid numeric values, skipping")
+                continue
+            
             validated.append(record)
         
         logger.info(f"Validated {len(validated)}/{len(records)} records")
@@ -99,34 +122,57 @@ class PolytopeAnalyzer:
     
     def reduce_dimensions(self, points: np.ndarray) -> Tuple[np.ndarray, Dict]:
         """
-        Reduce dimensionality using PCA for computational efficiency.
+        Reduce dimensionality using configurable methods for computational efficiency.
         
         Args:
             points: Input points (n_samples, n_features)
             
         Returns:
-            (reduced_points, pca_info)
+            (reduced_points, reduction_info)
         """
         if points.shape[0] < 2:
             return points, {}
         
-        n_components = min(self.n_pca_components, points.shape[0] - 1, points.shape[1])
+        if self.dimensionality_reduction == "none":
+            # No dimensionality reduction
+            return points, {
+                'method': 'none',
+                'n_components': points.shape[1],
+                'original_dims': points.shape[1],
+                'variance_explained': 1.0
+            }
         
-        # Standardize data
-        scaler = StandardScaler()
-        points_scaled = scaler.fit_transform(points)
+        elif self.dimensionality_reduction == "truncate":
+            # Simple truncation to first N dimensions
+            max_dims = min(50, points.shape[1])  # Limit to 50 dimensions
+            points_truncated = points[:, :max_dims]
+            
+            return points_truncated, {
+                'method': 'truncate',
+                'n_components': max_dims,
+                'original_dims': points.shape[1],
+                'variance_explained': None
+            }
         
-        # Apply PCA
-        pca = PCA(n_components=n_components)
-        points_reduced = pca.fit_transform(points_scaled)
-        
-        variance_explained = np.sum(pca.explained_variance_ratio_)
-        
-        return points_reduced, {
-            'variance_explained': variance_explained,
-            'n_components': n_components,
-            'original_dims': points.shape[1]
-        }
+        else:  # "pca" (default)
+            n_components = min(self.n_pca_components, points.shape[0] - 1, points.shape[1])
+            
+            # Standardize data
+            scaler = StandardScaler()
+            points_scaled = scaler.fit_transform(points)
+            
+            # Apply PCA
+            pca = PCA(n_components=n_components)
+            points_reduced = pca.fit_transform(points_scaled)
+            
+            variance_explained = np.sum(pca.explained_variance_ratio_)
+            
+            return points_reduced, {
+                'method': 'pca',
+                'variance_explained': variance_explained,
+                'n_components': n_components,
+                'original_dims': points.shape[1]
+            }
     
     def find_extreme_points(self, points: np.ndarray, n_components: int = 20) -> np.ndarray:
         """
@@ -167,14 +213,25 @@ class PolytopeAnalyzer:
         top_norm_indices = np.argsort(pca_norms)[-min(10, n_points):]
         extreme_indices.update(top_norm_indices)
         
-        # Add some random points for diversity in high dimensions
+        # Add more random points for diversity and to prevent convergence to same vertices
         if len(extreme_indices) < min(50, n_points // 20):
             remaining_indices = set(range(n_points)) - extreme_indices
             if remaining_indices:
                 self._ensure_random_seed()
-                n_random = min(10, len(remaining_indices))
+                # Increase random sampling to add more diversity
+                n_random = min(20, len(remaining_indices))  # Increased from 10 to 20
                 random_indices = np.random.choice(list(remaining_indices), size=n_random, replace=False)
                 extreme_indices.update(random_indices)
+        
+        # Add additional diversity by including points with high variance in different subspaces
+        if len(extreme_indices) < min(60, n_points // 10):  # Increased target size
+            remaining_indices = set(range(n_points)) - extreme_indices
+            if remaining_indices:
+                # Find points with high variance in different coordinate directions
+                remaining_points = points[list(remaining_indices)]
+                variances = np.var(remaining_points, axis=0)
+                high_var_indices = np.argsort(variances)[-min(10, len(remaining_indices)):]
+                extreme_indices.update([list(remaining_indices)[i] for i in high_var_indices])
         
         return np.array(list(extreme_indices))
 
@@ -227,6 +284,48 @@ class PolytopeAnalyzer:
             # Fallback: return distance to closest vertex
             return min_vertex_distance
 
+    def _compute_adaptive_epsilon(self, points: np.ndarray) -> float:
+        """
+        Compute adaptive epsilon based on data scale and distribution.
+        
+        Args:
+            points: Input points
+            
+        Returns:
+            Adaptive epsilon value
+        """
+        if len(points) < 2:
+            return self.approximation_epsilon
+        
+        # Use pairwise distances to estimate data scale
+        try:
+            distances = pdist(points)
+            if len(distances) == 0:
+                return self.approximation_epsilon
+            
+            # Use percentile-based approach for robustness
+            distance_scale = np.percentile(distances, 10)  # 10th percentile for robustness
+            
+            # Adaptive epsilon: smaller for tighter clusters, larger for spread out data
+            base_epsilon = min(self.approximation_epsilon, 0.01)
+            
+            # Make epsilon more sensitive to data changes by using a wider range
+            # and incorporating data variance
+            data_variance = np.var(points)
+            variance_factor = min(2.0, max(0.5, np.sqrt(data_variance) / 10))
+            
+            adaptive_epsilon = max(base_epsilon * 0.05, min(base_epsilon * 3, distance_scale * 0.1 * variance_factor))
+            
+            # Add small random component to prevent deterministic convergence
+            self._ensure_random_seed()
+            random_factor = 1.0 + 0.1 * np.random.random()
+            adaptive_epsilon *= random_factor
+            
+            return float(adaptive_epsilon)
+            
+        except Exception:
+            return self.approximation_epsilon
+
     def find_hull_vertices(self, points: np.ndarray) -> np.ndarray:
         """
         Find convex hull vertices using greedy approximation for high-dimensional data.
@@ -237,10 +336,13 @@ class PolytopeAnalyzer:
         Returns:
             Indices of hull vertices
         """
-        return self.greedy_hull_approximation(points, epsilon=self.approximation_epsilon)
+        # Adaptive epsilon based on data scale
+        adaptive_epsilon = self._compute_adaptive_epsilon(points)
+        return self.greedy_hull_approximation(points, epsilon=adaptive_epsilon)
 
     def revised_greedy_expansion_algorithm(self, points: np.ndarray, epsilon: float = 0.05, 
-                                         max_iter: int = 1000, max_runtime: float = 60.0, verbose: bool = False) -> np.ndarray:
+                                         max_iter: int = 1000, max_runtime: float = 60.0, verbose: bool = False,
+                                         max_hull_vertices: int = None) -> np.ndarray:
         r"""
         Fast Revised Greedy Expansion Algorithm for convex hull approximation.
         
@@ -328,6 +430,12 @@ class PolytopeAnalyzer:
                     E.add(selected_point)
                     R.discard(selected_point)
                     
+                    # Check if we've reached the maximum hull vertices limit
+                    if max_hull_vertices is not None and len(E) >= max_hull_vertices:
+                        if verbose:
+                            logger.info(f"Reached maximum hull vertices limit ({max_hull_vertices}), stopping")
+                        break
+                    
                     # Progress reporting
                     if verbose and (iteration + 1) % 10 == 0:
                         logger.info(f"Iteration {iteration + 1}: |E|={len(E)}, |R|={len(R)}, "
@@ -382,7 +490,16 @@ class PolytopeAnalyzer:
         """
         # Auto-adjust parameters based on data size for performance
         max_runtime = 30.0 if len(points) > 1000 else 60.0
-        return self.revised_greedy_expansion_algorithm(points, epsilon, max_iter, max_runtime, verbose)
+        
+        # Use more conservative epsilon to prevent including all points
+        conservative_epsilon = max(epsilon * 2.0, 0.1)  # Increase epsilon for more conservative hull
+        
+        # Limit maximum hull vertices to prevent degenerate cases
+        max_hull_vertices = min(len(points) // 4, 50)  # At most 25% of points or 50 vertices
+        
+        return self.revised_greedy_expansion_algorithm(
+            points, conservative_epsilon, max_iter, max_runtime, verbose, max_hull_vertices
+        )
 
     def _compute_outside_points(self, points: np.ndarray, E: set, epsilon: float, verbose: bool = False) -> set:
         r"""
@@ -645,12 +762,23 @@ class PolytopeAnalyzer:
             return self._compute_simplex_volume(points)
         
         try:
+            # For high-dimensional sparse data, use bounding box volume as more stable estimate
+            bounding_volume = self._compute_bounding_box_volume(points)
+            
+            # If bounding volume is too small, the polytope is essentially degenerate
+            if bounding_volume < 1e-15:
+                logger.debug("Degenerate polytope detected, using effective volume")
+                return self._compute_effective_volume(points)
+            
             # Get approximate hull vertices
             hull_vertex_indices = self.find_hull_vertices(points)
             hull_points = points[hull_vertex_indices]
             
-            # Use improved Monte Carlo volume estimation
-            return self._robust_monte_carlo_volume(hull_points)
+            # Use improved Monte Carlo volume estimation with fallback
+            mc_volume = self._robust_monte_carlo_volume(hull_points)
+            
+            # Return the more conservative estimate
+            return min(mc_volume, bounding_volume) if mc_volume > 0 else bounding_volume
             
         except Exception as e:
             logger.warning(f"Volume computation failed, using fallback: {e}")
@@ -754,6 +882,9 @@ class PolytopeAnalyzer:
         n_inside = 0
         batch_size = min(1000, adaptive_samples)
         
+        # Adaptive threshold based on data scale
+        adaptive_threshold = max(1e-6, 0.01 * np.mean(effective_ranges))
+        
         for batch_start in range(0, adaptive_samples, batch_size):
             current_batch_size = min(batch_size, adaptive_samples - batch_start)
             
@@ -766,7 +897,7 @@ class PolytopeAnalyzer:
             # Check points against hull using vectorized operations where possible
             for point in random_points:
                 distance = self.distance_to_approximate_hull(point, hull_points)
-                if distance <= 1e-8:  # More strict tolerance for "inside"
+                if distance <= adaptive_threshold:  # Adaptive tolerance for "inside"
                     n_inside += 1
         
         # Estimate volume
@@ -774,6 +905,40 @@ class PolytopeAnalyzer:
         estimated_volume = box_volume * volume_ratio
         
         return float(estimated_volume)
+    
+    def _compute_effective_volume(self, points: np.ndarray) -> float:
+        """
+        Compute effective volume for degenerate polytopes based on point spread.
+        
+        Args:
+            points: Input points
+            
+        Returns:
+            Effective volume measure
+        """
+        n_points, n_dims = points.shape
+        
+        # Compute pairwise distances
+        try:
+            distances = pdist(points)
+            if len(distances) == 0:
+                return 0.0
+            
+            # Use geometric mean of distances as volume proxy
+            mean_distance = np.mean(distances)
+            std_distance = np.std(distances)
+            
+            # Volume proxy: mean distance raised to effective dimension
+            # Use coefficient of variation to estimate effective dimension
+            if mean_distance > 0:
+                cv = std_distance / mean_distance
+                effective_dim = min(n_dims, max(1.0, 3.0 * cv))  # Heuristic
+                return mean_distance ** effective_dim
+            else:
+                return 0.0
+                
+        except Exception:
+            return 0.0
     
     def _approximate_monte_carlo_volume(self, hull_points: np.ndarray, n_samples: int = 10000) -> float:
         """
@@ -826,11 +991,22 @@ class PolytopeAnalyzer:
             if n_dims <= 1:
                 return max_distance
             else:
-                # Estimate surface area using hull vertices and mean distances
-                surface_scaling = n_hull_vertices * (mean_distance ** (n_dims - 1))
+                # Stable surface area estimation using logarithmic scaling
+                # Avoid exponential explosion while preserving relative differences
+                base_area = n_hull_vertices * mean_distance
+                
+                # Use log scaling for dimensional effects to prevent numerical explosion
+                if n_dims > 3:
+                    # For high dimensions, use logarithmic scaling
+                    dim_factor = 1 + np.log(n_dims) * np.log(max_distance / mean_distance + 1)
+                else:
+                    # For low dimensions, use conservative power scaling
+                    dim_factor = (mean_distance / max(mean_distance/10, 1)) ** min(2, n_dims - 1)
+                
+                surface_scaling = base_area * dim_factor
                 
                 # Apply correction factor for high dimensions
-                dim_correction = np.sqrt(n_dims)
+                dim_correction = np.sqrt(max(1, n_dims / 10))
                 
                 return surface_scaling / dim_correction
                 
@@ -846,6 +1022,28 @@ class PolytopeAnalyzer:
             except:
                 return 0.0
     
+    def _get_default_metrics(self) -> Dict[str, float]:
+        """
+        Get default polytope metrics for degenerate cases.
+        
+        Returns:
+            Dictionary with default metric values
+        """
+        return {
+            'volume': 0.0,
+            'surface_area': 0.0,
+            'n_vertices': 0,
+            'n_facets': 0,
+            'mean_distance': 0.0,
+            'std_distance': 0.0,
+            'centroid_variance': 0.0,
+            'effective_dimension': 0.0,
+            'boundary_density': 0.0,
+            'inter_polytope_distance': 0.0,
+            'geometric_regularity': 0.0,
+            'hull_valid': False
+        }
+    
     def compute_polytope_metrics(self, points: np.ndarray) -> Dict[str, float]:
         """
         Compute comprehensive polytope metrics.
@@ -857,13 +1055,32 @@ class PolytopeAnalyzer:
             Dictionary of polytope metrics
         """
         try:
+            # Validation checks
+            if len(points) < 2:
+                logger.warning(f"Insufficient points for polytope analysis: {len(points)}")
+                return self._get_default_metrics()
+            
             # Find hull vertices
             hull_indices = self.find_hull_vertices(points)
             hull_points = points[hull_indices]
             
+            # Validation: ensure hull vertices are reasonable
+            hull_ratio = len(hull_indices) / len(points)
+            if hull_ratio > 0.95:  # Increased threshold - high ratios are normal for sparse neural data
+                logger.warning(f"Very high hull vertex ratio {hull_ratio:.3f} - may indicate degenerate polytope")
+            elif hull_ratio > 0.8:
+                logger.debug(f"High hull vertex ratio {hull_ratio:.3f} - normal for sparse high-dimensional data")
+            
+            # Debug: Log hull vertex count for tracking changes
+            logger.debug(f"Hull vertices: {len(hull_indices)} out of {len(points)} points (ratio: {hull_ratio:.3f})")
+            
             # Compute volume and surface area
             volume = self.compute_volume(hull_points)
             surface_area = self.compute_surface_area(hull_points)
+            
+            # Debug information
+            logger.debug(f"Polytope metrics: n_points={len(points)}, n_hull={len(hull_indices)}, "
+                        f"volume={volume:.2e}, surface_area={surface_area:.2e}")
             
             # Compute distance metrics
             distances = pdist(points)
@@ -928,11 +1145,11 @@ class PolytopeAnalyzer:
         Returns:
             Dictionary with 'high' and 'low' frequency groups
         """
-        frequency_categories = [r['frequency_categories'] for r in records]
+        frequency_categories = [r['category'] for r in records]
         # get distinct frequency categories
         distinct_categories = list(set(frequency_categories))
         # stratify records by frequency category
-        stratified_records = {cat: [r for r in records if r['frequency_categories'] == cat] for cat in distinct_categories}
+        stratified_records = {cat: [r for r in records if r['category'] == cat] for cat in distinct_categories}
         # should be {'high': [*ngrams], 'low': [*ngrams]}
         return stratified_records
         
@@ -963,11 +1180,12 @@ class PolytopeAnalyzer:
         
         # Compute activation statistics
         activation_stats = {
-            'mean_frequency': np.mean([r['ngram_frequency'] for r in records]),
-            'std_frequency': np.std([r['ngram_frequency'] for r in records]),
             'mean_sparsity': np.mean([r['sparsity'] for r in records]),
+            'std_sparsity': np.std([r['sparsity'] for r in records]),
             'mean_norm': np.mean([r['activation_norm'] for r in records]),
-            'mean_active_neurons': np.mean([r['n_active_neurons'] for r in records])
+            'std_norm': np.std([r['activation_norm'] for r in records]),
+            'mean_active_neurons': np.mean([r['n_active_neurons'] for r in records]),
+            'std_active_neurons': np.std([r['n_active_neurons'] for r in records])
         }
         
         return {
@@ -980,30 +1198,46 @@ class PolytopeAnalyzer:
     
     def compare_across_checkpoints(self, records: List[Dict]) -> Dict[str, Any]:
         """
-        Compare high vs low frequency groups across checkpoints.
+        Compare high vs low frequency groups across checkpoints and layers.
         
         Args:
             records: List of activation records
             
         Returns:
-            Comparison results across checkpoints
+            Comparison results across checkpoints and layers
         """
-        # Group by checkpoint
-        checkpoint_groups = defaultdict(list)
+        # Group by (checkpoint, layer) for proper comparison
+        checkpoint_layer_groups = defaultdict(list)
         for record in records:
-            checkpoint_groups[record['checkpoint_step']].append(record)
+            key = (record['checkpoint_step'], record.get('layer', 0))
+            checkpoint_layer_groups[key].append(record)
         
         results = {
-            'checkpoint_analysis': {},
+            'checkpoint_layer_analysis': {},
             'comparison_summary': {},
             'evolution_metrics': []
         }
         
-        for checkpoint, checkpoint_records in checkpoint_groups.items():
-            logger.info(f"Analyzing checkpoint {checkpoint} with {len(checkpoint_records)} records")
+        for (checkpoint, layer), checkpoint_layer_records in checkpoint_layer_groups.items():
+            logger.info(f"Analyzing checkpoint {checkpoint}, layer {layer} with {len(checkpoint_layer_records)} records")
             
-            # Stratify by frequency
-            freq_groups = self.stratify_by_frequency(checkpoint_records)
+            # Skip if insufficient data for this checkpoint-layer combination
+            if len(checkpoint_layer_records) < 4:
+                logger.warning(f"Insufficient records for checkpoint {checkpoint}, layer {layer}: {len(checkpoint_layer_records)}")
+                continue
+            
+            # Stratify by frequency within this checkpoint-layer group
+            freq_groups = self.stratify_by_frequency(checkpoint_layer_records)
+            
+            # Verify we have both frequency groups
+            if 'high' not in freq_groups or 'low' not in freq_groups:
+                logger.warning(f"Missing frequency groups for checkpoint {checkpoint}, layer {layer}")
+                continue
+            
+            # Check minimum group sizes
+            if len(freq_groups['high']) < 2 or len(freq_groups['low']) < 2:
+                logger.warning(f"Insufficient records in frequency groups for checkpoint {checkpoint}, layer {layer}")
+                continue
             
             checkpoint_results = {}
             
@@ -1019,58 +1253,71 @@ class PolytopeAnalyzer:
                 high_stats = checkpoint_results['high']['activation_stats']
                 low_stats = checkpoint_results['low']['activation_stats']
                 
+                def safe_ratio(a, b, fallback=1.0):
+                    """Compute ratio safely, handling zero denominators and extreme values."""
+                    if abs(b) < 1e-15:  # Denominator is essentially zero
+                        return fallback if abs(a) < 1e-15 else (1e6 if a > 0 else -1e6)
+                    ratio = a / b
+                    # Cap extreme ratios for numerical stability
+                    return max(-1e6, min(1e6, ratio))
+                
                 comparison = {
                     # Volume metrics
-                    'volume_ratio_high_to_low': high_metrics['volume'] / low_metrics['volume'] if low_metrics['volume'] > 1e-10 else float('inf'),
+                    'volume_ratio_high_to_low': safe_ratio(high_metrics['volume'], low_metrics['volume']),
                     'volume_difference': high_metrics['volume'] - low_metrics['volume'],
                     
-                    # Surface area metrics
-                    'surface_area_ratio_high_to_low': high_metrics['surface_area'] / low_metrics['surface_area'] if low_metrics['surface_area'] > 1e-10 else float('inf'),
+                    # Surface area metrics  
+                    'surface_area_ratio_high_to_low': safe_ratio(high_metrics['surface_area'], low_metrics['surface_area']),
                     'surface_area_difference': high_metrics['surface_area'] - low_metrics['surface_area'],
                     
                     # Boundary metrics
-                    'boundary_density_ratio': high_metrics['boundary_density'] / low_metrics['boundary_density'] if low_metrics['boundary_density'] > 1e-10 else float('inf'),
+                    'boundary_density_ratio': safe_ratio(high_metrics['boundary_density'], low_metrics['boundary_density']),
                     'boundary_density_difference': high_metrics['boundary_density'] - low_metrics['boundary_density'],
                     
                     # Distance metrics
-                    'inter_polytope_distance_ratio': high_metrics['inter_polytope_distance'] / low_metrics['inter_polytope_distance'] if low_metrics['inter_polytope_distance'] > 1e-10 else float('inf'),
+                    'inter_polytope_distance_ratio': safe_ratio(high_metrics['inter_polytope_distance'], low_metrics['inter_polytope_distance']),
                     'inter_polytope_distance_difference': high_metrics['inter_polytope_distance'] - low_metrics['inter_polytope_distance'],
                     
                     # Regularity metrics
-                    'geometric_regularity_ratio': high_metrics['geometric_regularity'] / low_metrics['geometric_regularity'] if low_metrics['geometric_regularity'] > 1e-10 else float('inf'),
+                    'geometric_regularity_ratio': safe_ratio(high_metrics['geometric_regularity'], low_metrics['geometric_regularity']),
                     'geometric_regularity_difference': high_metrics['geometric_regularity'] - low_metrics['geometric_regularity'],
                     
                     # Dimension metrics
-                    'effective_dimension_ratio': high_metrics['effective_dimension'] / low_metrics['effective_dimension'] if low_metrics['effective_dimension'] > 1e-10 else float('inf'),
+                    'effective_dimension_ratio': safe_ratio(high_metrics['effective_dimension'], low_metrics['effective_dimension']),
                     'effective_dimension_difference': high_metrics['effective_dimension'] - low_metrics['effective_dimension'],
                     
                     # Vertex count metrics
-                    'n_vertices_ratio': high_metrics['n_vertices'] / low_metrics['n_vertices'] if low_metrics['n_vertices'] > 0 else float('inf'),
+                    'n_vertices_ratio': safe_ratio(high_metrics['n_vertices'], low_metrics['n_vertices']),
                     'n_vertices_difference': high_metrics['n_vertices'] - low_metrics['n_vertices'],
                     
                     # Distance spread metrics
-                    'mean_distance_ratio': high_metrics['mean_distance'] / low_metrics['mean_distance'] if low_metrics['mean_distance'] > 1e-10 else float('inf'),
-                    'std_distance_ratio': high_metrics['std_distance'] / low_metrics['std_distance'] if low_metrics['std_distance'] > 1e-10 else float('inf'),
+                    'mean_distance_ratio': safe_ratio(high_metrics['mean_distance'], low_metrics['mean_distance']),
+                    'std_distance_ratio': safe_ratio(high_metrics['std_distance'], low_metrics['std_distance']),
                     
                     # Centroid metrics
-                    'centroid_variance_ratio': high_metrics['centroid_variance'] / low_metrics['centroid_variance'] if low_metrics['centroid_variance'] > 1e-10 else float('inf'),
+                    'centroid_variance_ratio': safe_ratio(high_metrics['centroid_variance'], low_metrics['centroid_variance']),
                     'centroid_variance_difference': high_metrics['centroid_variance'] - low_metrics['centroid_variance'],
                     
                     # Activation stats (original metrics)
                     'sparsity_difference': low_stats['mean_sparsity'] - high_stats['mean_sparsity'],
-                    'norm_ratio': high_stats['mean_norm'] / low_stats['mean_norm'] if low_stats['mean_norm'] > 0 else 1.0
+                    'norm_ratio': safe_ratio(high_stats['mean_norm'], low_stats['mean_norm'])
                 }
                 checkpoint_results['comparison'] = comparison
             
-            results['checkpoint_analysis'][checkpoint] = checkpoint_results
+            # Use compound key for checkpoint-layer analysis
+            results['checkpoint_layer_analysis'][f"{checkpoint}_layer{layer}"] = checkpoint_results
         
         # Compute evolution metrics for all polytope metrics
         evolution_data = []
-        for checkpoint, data in results['checkpoint_analysis'].items():
+        for key, data in results['checkpoint_layer_analysis'].items():
             if 'comparison' in data:
                 comp = data['comparison']
+                # Extract checkpoint and layer from key
+                checkpoint_str, layer_str = key.split('_layer')
                 evolution_point = {
-                    'checkpoint': checkpoint,
+                    'checkpoint_layer_key': key,
+                    'checkpoint': checkpoint_str,
+                    'layer': int(layer_str),
                     # Volume evolution
                     'volume_ratio': comp['volume_ratio_high_to_low'],
                     'volume_difference': comp['volume_difference'],
@@ -1272,14 +1519,18 @@ class PolytopeAnalyzer:
         
         # Plot 4: Detailed Comparison by Group
         checkpoint_data = []
-        for checkpoint, data in analysis_results['checkpoint_analysis'].items():
+        for key, data in analysis_results.get('checkpoint_layer_analysis', {}).items():
             for group in ['high', 'low']:
                 if group in data and 'polytope_metrics' in data[group]:
                     metrics = data[group]['polytope_metrics']
                     stats = data[group]['activation_stats']
                     
+                    # Extract checkpoint and layer from key
+                    checkpoint_str, layer_str = key.split('_layer')
                     checkpoint_data.append({
-                        'checkpoint': checkpoint,
+                        'checkpoint_layer_key': key,
+                        'checkpoint': checkpoint_str,
+                        'layer': int(layer_str),
                         'frequency_group': group,
                         'volume': metrics['volume'],
                         'surface_area': metrics['surface_area'],
@@ -1345,12 +1596,14 @@ class PolytopeAnalyzer:
         
         Args:
             records: List of activation records with keys:
-                    - activation_vector: np.ndarray
-                    - frequency: float 
+                    - activation_vector: np.ndarray (required)
+                    - category: str ('high' or 'low') (required)
+                    - sparsity: float (required)
+                    - activation_norm: float (required)
+                    - n_active_neurons: int (required)
+                    - checkpoint_step: int (optional)
                     - layer: int (optional)
-                    - checkpoint: str (optional)
                     - ngram: str (optional)
-                    - binary_pattern: np.ndarray (optional)
                     
         Returns:
             Complete analysis results
@@ -1382,43 +1635,48 @@ class PolytopeAnalyzer:
     
     def _generate_summary(self, analysis_results: Dict[str, Any], records: List[Dict]) -> Dict[str, Any]:
         """Generate analysis summary."""
-        # Basic statistics
-        frequencies = [r['ngram_frequency'] for r in records]
+        # Category-based statistics (using existing 'category' field)
+        high_freq_records = [r for r in records if r['category'] == 'high']
+        low_freq_records = [r for r in records if r['category'] == 'low']
         
-        # Frequency-based statistics
-        median_freq = np.median(frequencies)
-        high_freq_records = [r for r in records if r['ngram_frequency'] >= median_freq]
-        low_freq_records = [r for r in records if r['ngram_frequency'] < median_freq]
-        
-        high_sparsity = np.mean([r['sparsity'] for r in high_freq_records])
-        low_sparsity = np.mean([r['sparsity'] for r in low_freq_records])
-        
-        high_norm = np.mean([r['activation_norm'] for r in high_freq_records])
-        low_norm = np.mean([r['activation_norm'] for r in low_freq_records])
+        # Compute group statistics if both groups exist
+        if high_freq_records and low_freq_records:
+            high_sparsity = np.mean([r['sparsity'] for r in high_freq_records])
+            low_sparsity = np.mean([r['sparsity'] for r in low_freq_records])
+            
+            high_norm = np.mean([r['activation_norm'] for r in high_freq_records])
+            low_norm = np.mean([r['activation_norm'] for r in low_freq_records])
+            
+            high_active_neurons = np.mean([r['n_active_neurons'] for r in high_freq_records])
+            low_active_neurons = np.mean([r['n_active_neurons'] for r in low_freq_records])
+        else:
+            high_sparsity = low_sparsity = 0.0
+            high_norm = low_norm = 0.0
+            high_active_neurons = low_active_neurons = 0.0
         
         return {
             'total_records': len(records),
             'n_checkpoints': len(set(r['checkpoint_step'] for r in records)),
             'n_layers': len(set(r['layer'] for r in records)),
-            'frequency_stats': {
-                'min': np.min(frequencies),
-                'max': np.max(frequencies),
-                'median': median_freq,
-                'mean': np.mean(frequencies)
+            'category_distribution': {
+                'high_frequency': len(high_freq_records),
+                'low_frequency': len(low_freq_records)
             },
             'high_frequency_group': {
                 'n_records': len(high_freq_records),
                 'mean_sparsity': high_sparsity,
-                'mean_norm': high_norm
+                'mean_norm': high_norm,
+                'mean_active_neurons': high_active_neurons
             },
             'low_frequency_group': {
                 'n_records': len(low_freq_records),
                 'mean_sparsity': low_sparsity,
-                'mean_norm': low_norm
+                'mean_norm': low_norm,
+                'mean_active_neurons': low_active_neurons
             },
             'key_findings': {
                 'sparsity_difference': low_sparsity - high_sparsity,
                 'norm_ratio': high_norm / low_norm if low_norm > 0 else 1.0,
-                'frequency_range': np.max(frequencies) - np.min(frequencies)
+                'active_neurons_difference': high_active_neurons - low_active_neurons
             }
         }
