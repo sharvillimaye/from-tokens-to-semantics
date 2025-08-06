@@ -1,18 +1,26 @@
 """
-Based on Foote (2024) – Tackling Polysemanticity with Neuron Embeddings.
+Neuron Embeddings Toolkit - based on Foote's (2024) work on polysemanticity.
 
-Main components
----------------
-1. `neuron_embedding` – calculate Hadamard product of pre‑MLP activations and neuron input weights.
-2. `EmbeddingCollector` – utility to grab high‑activation examples + embeddings.
-3. `cluster_embeddings` – hierarchical agglomerative clustering (HAC) with cosine distance.
-4. `polysemanticity_metrics` – max/mean dist, intra/inter‑cluster dist, # of clusters.
-5. `NeuronEmbeddingLoss` – drop‑in loss for training Sparse Auto‑Encoders (SAEs) that penalises polysemantic neurons.
+This toolkit helps you analyze how neurons in a language model, such as GPT-2 or Pythia, respond 
+to various inputs by calculating a metric Foote (2024) labels as "neuron embeddings" (NE).
+The main idea is that we can understand what a neuron's reaction to a text excerpt is by calculating 
+the Hadamard product of its input weights and the vector representation it receives (pre-MLP activations).
+
+Based on this metric, we can select the top-k excerpts that a neuron is most sensitve to, and then
+cluster these excerpts (using HAC) based on their semantic similarity. This allows us to measure how
+"polysemantic" a neuron is. We can get various metrics, including # of clusters, size of clusters,
+intra- and inter-cluster distances, etc. 
+
+What's in here:
+- `neuron_embedding`: calculates NE for a single neuron
+- `EmbeddingCollector`: grabs high-activation examples and their embeddings
+- `cluster_embeddings`: groups similar embeddings together using hierarchical agglomerative clustering (HAC)
+- `polysemanticity_metrics`: returns various polysemanticity metrics
 """
 from __future__ import annotations
 
 import math
-from typing import List, Dict, Iterable
+from typing import List, Dict, Iterable, Optional
 
 import torch # type: ignore
 import torch.nn as nn # type: ignore
@@ -21,59 +29,174 @@ import numpy as np # type: ignore
 from sklearn.metrics import pairwise_distances # type: ignore
 from sklearn.cluster import AgglomerativeClustering # type: ignore
 
+try:
+    from transformer_lens import HookedTransformer # type: ignore
+    TRANSFORMER_LENS_AVAILABLE = True
+except ImportError:
+    TRANSFORMER_LENS_AVAILABLE = False
+    HookedTransformer = None
+
 # -----------------------------------------------------------------------------
-# 1.  Core primitive ----------------------------------------------------------------
+# Core building block - NE calculation
 # -----------------------------------------------------------------------------
 
 def neuron_embedding(pre_mlp: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
-    """Compute neuron embedding `e = h ⊙ w` for a single neuron.
-
-    Parameters
-    ----------
-    pre_mlp : torch.Tensor
-        Activations just **before** the MLP layer.
-    weights : torch.Tensor
-        Input weights of the neuron.
-
-    Returns
-    -------
-    torch.Tensor
-        Hadamard product of pre_mlp and weights.
-    """
     weights = weights.to(pre_mlp)
     return pre_mlp * weights
 
 # -----------------------------------------------------------------------------
-# 2.  Collecting embeddings ------------------------------------------------------
+# Get embeddings from high-activation examples
 # -----------------------------------------------------------------------------
-class EmbeddingCollector:
-    """Collect high‑activation examples and associated neuron embeddings.
 
-    Works with any PyTorch nn.Module. You supply:
-        • a *hook* to grab pre‑MLP activations
-        • a *target neuron* (layer module + neuron index)
-
-    Example (TransformerLens):
-    >>> model = HookedTransformer.from_pretrained('gpt2-small')
-    >>> collector = EmbeddingCollector(model,
-    ...                                layer_name='blocks.6.mlp',
-    ...                                neuron_idx=1234)
-    ...
+class TransformerLensEmbeddingCollector:
+    """Gets high-activation examples using TransformerLens's built-in caching.
+    
+    This is optimized to take advantage of TransformerLens's native caching
+    to get neuron activations directly without using custom hooks.
     """
+    
+    def __init__(self,
+                 model: 'HookedTransformer',  # TransformerLens model
+                 layer_name: str,
+                 neuron_idx: int,
+                 activation_threshold: float = 0.75,
+                 peak_activation: Optional[float] = None,
+                 max_examples: int = 100,
+                 device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+                 decode_text: bool = True):
+        
+        if not TRANSFORMER_LENS_AVAILABLE:
+            raise ImportError("Install transformer-lens with: pip install transformer-lens")
+        
+        if not hasattr(model, 'run_with_cache'):
+            raise ValueError("Model must be a TransformerLens HookedTransformer to use TransformerLensEmbeddingCollector")
+        self.model = model.to(device).eval()
+        self.layer_name = layer_name
+        self.neuron_idx = neuron_idx
+        self.max_examples = max_examples
+        self.device = device
+        
+        # Set activation threshold based on peak activation if provided
+        if peak_activation is not None:
+            self.activation_threshold = activation_threshold * peak_activation
+        else:
+            self.activation_threshold = activation_threshold
 
+        self._pre_mlp_cache: List[torch.Tensor] = []
+        self._activation_cache: List[float] = []
+        self._text_cache: List[str] = []  # Store the actual text examples
+        self.decode_text = decode_text
+        
+        # Get the weight vector for this neuron
+        self._setup_weight_vector()
+    
+    def _setup_weight_vector(self):
+        """Extract weight vector for the target neuron."""
+        # Get the MLP module
+        mlp_name = self.layer_name
+        mlp_module = dict(self.model.named_modules())[mlp_name]
+        
+        # Extract weight vector based on module type
+        if hasattr(mlp_module, 'W_in'):
+            # TransformerLens MLP module
+            if self.neuron_idx >= mlp_module.W_in.shape[1]:
+                raise ValueError(f'Neuron index {self.neuron_idx} is out of bounds. Layer has {mlp_module.W_in.shape[1]} neurons')
+            self.weight_vector = mlp_module.W_in[:, self.neuron_idx].detach().clone()
+        elif hasattr(mlp_module, 'c_fc'):
+            # GPT-2 style MLP
+            if self.neuron_idx >= mlp_module.c_fc.weight.shape[0]:
+                raise ValueError(f'Neuron index {self.neuron_idx} is out of bounds. Layer has {mlp_module.c_fc.weight.shape[0]} neurons')
+            self.weight_vector = mlp_module.c_fc.weight[self.neuron_idx].detach().clone()
+        else:
+            raise ValueError(f'Unsupported module type for {mlp_name}')
+    
+    def run(self, dataloader: Iterable):
+        """Stream data through the model using TransformerLens's built-in caching."""
+        with torch.no_grad():
+            for batch in dataloader:
+                # Handle tokenizer output
+                if hasattr(batch, 'keys') and 'input_ids' in batch:
+                    input_ids = batch['input_ids'].to(self.device)
+                else:
+                    input_ids = batch.to(self.device)
+                
+                # Use TransformerLens's built-in caching to get activations
+                # This gets all activations in one go - much more efficient!
+                _, cache = self.model.run_with_cache(input_ids)
+                
+                # Get the specific neuron's activations directly from cache
+                # blocks.6.mlp.hook_post contains activations for all neurons in that MLP
+                mlp_activations = cache[f"{self.layer_name}.hook_post"]  # Shape: [batch, seq_len, d_mlp]
+                neuron_activations = mlp_activations[..., self.neuron_idx]  # Shape: [batch, seq_len]
+                
+                # Get pre-MLP activations for embedding calculation
+                # Try hook_resid_mid first (GPT-2 style), then hook_resid_pre (Pythia style)
+                resid_hook_name = f"{self.layer_name.replace('.mlp', '.hook_resid_mid')}"
+                if resid_hook_name not in cache:
+                    resid_hook_name = f"{self.layer_name.replace('.mlp', '.hook_resid_pre')}"
+                resid_mid_activations = cache[resid_hook_name]  # Shape: [batch, seq_len, d_model]
+                
+                # Find high-activation examples
+                max_acts = neuron_activations.amax(dim=-1)  # Max across sequence length
+                
+                for batch_idx, max_act in enumerate(max_acts):
+                    if len(self._activation_cache) >= self.max_examples:
+                        break
+                    
+                    if max_act >= self.activation_threshold:
+                        # Find the token with highest activation
+                        seq_idx = neuron_activations[batch_idx].argmax()
+                        
+                        # Get pre-MLP activations for this token
+                        pre_mlp = resid_mid_activations[batch_idx, seq_idx]  # Shape: [d_model]
+                        
+                        # Get the text for this example (optional for speed)
+                        if self.decode_text:
+                            try:
+                                token_ids = input_ids[batch_idx, seq_idx:seq_idx+10]  # Get context around the token
+                                text_example = self.model.tokenizer.decode(token_ids, skip_special_tokens=True)
+                            except:
+                                text_example = f"token_{seq_idx}"  # Fallback if decoding fails
+                        else:
+                            text_example = f"token_{seq_idx}"  # Skip decoding for speed
+                        
+                        self._pre_mlp_cache.append(pre_mlp.cpu())
+                        self._activation_cache.append(max_act.item())
+                        self._text_cache.append(text_example)
+                
+                if len(self._activation_cache) >= self.max_examples:
+                    break
+        
+        # Create embeddings
+        embeds = [neuron_embedding(p, self.weight_vector) for p in self._pre_mlp_cache]
+        return torch.stack(embeds).cpu().numpy()
+
+# This isn't used in any scripts, but is here for reference as what I first wrote. 
+class EmbeddingCollector:
+    """This is the general-purpose version that works with any PyTorch nn.Module.
+    You provide:
+        - a hook to grab pre-MLP activations
+        - a target neuron (layer module + neuron index)
+    """
     def __init__(self,
                  model: nn.Module,
                  layer_name: str,
                  neuron_idx: int,
                  activation_threshold: float = 0.75,
+                 peak_activation: Optional[float] = None,
                  max_examples: int = 100,
-                 device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
+                 device: str = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'):
         self.model = model.to(device).eval()
         self.layer_name = layer_name
         self.neuron_idx = neuron_idx
-        self.activation_threshold = activation_threshold
         self.max_examples = max_examples
         self.device = device
+        
+        # Set activation threshold based on peak activation if provided
+        if peak_activation is not None:
+            self.activation_threshold = activation_threshold * peak_activation
+        else:
+            self.activation_threshold = activation_threshold
 
         self._pre_mlp_cache: List[torch.Tensor] = []
         self._activation_cache: List[float] = []
@@ -151,7 +274,7 @@ class EmbeddingCollector:
         self._hook_handle = hook_module.register_forward_hook(hook_fn, with_kwargs=False)
 
     def run(self, dataloader: Iterable):
-        """Stream data through the model until caches are full."""
+        """Stream data through the model until we've collected enough examples."""
         with torch.no_grad():
             for batch in dataloader:
                 # Handle tokenizer output (dict with input_ids, attention_mask)
@@ -173,13 +296,16 @@ class EmbeddingCollector:
         return torch.stack(embeds).cpu().numpy()
 
 # -----------------------------------------------------------------------------
-# 3.  Clustering -----------------------------------------------------------------
+# Clustering embeddings to explore polysemanticity
 # -----------------------------------------------------------------------------
 
-def cluster_embeddings(embeddings: np.ndarray, distance_threshold: float = 0.5):
-    """Hierarchical Agglomerative Clustering with cosine distance.
-    Returns cluster labels (same length as embeddings)."""
-    # Compute cosine distance matrix
+def cluster_embeddings(embeddings: np.ndarray, distance_threshold: float = 0.8):
+    """Group similar embeddings together using hierarchical clustering.
+    
+    Uses cosine distance to measure similarity between embeddings, then groups
+    them hierarchically. Returns cluster labels for each embedding.
+    """
+    # Calculate cosine distance matrix
     dists = pairwise_distances(embeddings, metric='cosine')
     # HAC
     hac = AgglomerativeClustering(
@@ -192,10 +318,12 @@ def cluster_embeddings(embeddings: np.ndarray, distance_threshold: float = 0.5):
     return labels
 
 # -----------------------------------------------------------------------------
-# 4.  Metrics --------------------------------------------------------------------
+# Calculate polysemanticity metrics
 # -----------------------------------------------------------------------------
 
 def polysemanticity_metrics(embeddings: np.ndarray, labels: np.ndarray) -> Dict[str, float]:
+    """Calculate metrics to quantify a neuron's polysemanticity.
+    """
     if len(embeddings) != len(labels):
         raise ValueError('embeddings and labels length mismatch')
     dmat = pairwise_distances(embeddings, metric='cosine')
@@ -207,97 +335,26 @@ def polysemanticity_metrics(embeddings: np.ndarray, labels: np.ndarray) -> Dict[
             else:
                 inter.append(dmat[i, j])
     
-    # Calculate mean distance across all pairs
+    # Calculate average distance across all pairs
     all_distances = []
     for i in range(len(embeddings)):
         for j in range(i + 1, len(embeddings)):
             all_distances.append(dmat[i, j])
     
+    # Calculate cluster sizes
+    from collections import Counter
+    cluster_sizes = Counter(labels)
+    single_element_clusters = sum(1 for size in cluster_sizes.values() if size == 1)
+    
     return {
+        'embeddings': int(len(embeddings)),
         'mean_dist': float(np.mean(all_distances)) if all_distances else math.nan,
         'mean_intra': float(np.mean(intra)) if intra else math.nan,
         'mean_inter': float(np.mean(inter)) if inter else math.nan,
         'max_dist': float(dmat.max()),
         'num_clusters': int(len(set(labels))),
+        'single_element_clusters': int(single_element_clusters),
+        'largest_cluster_size': int(max(cluster_sizes.values())),
+        'least_cluster_size': int(min(cluster_sizes.values())),
+        'cluster_sizes': {int(k): int(v) for k, v in cluster_sizes.items()},
     }
-
-# -----------------------------------------------------------------------------
-# 5.  SAE training helper --------------------------------------------------------
-# -----------------------------------------------------------------------------
-class NeuronEmbeddingLoss(nn.Module):
-    """Loss term LN (Eq. 4) to encourage monosemanticity in SAE neurons."""
-
-    def __init__(self, lambda_ne: float = 0.1, momentum: float = 0.9):
-        super().__init__()
-        self.lambda_ne = lambda_ne
-        self.momentum = momentum
-        self.register_buffer('running_means', torch.empty(0))  # will be resized lazily
-
-    def forward(self, pre_sae: torch.Tensor, sae_weight: torch.Tensor, sae_act: torch.Tensor):
-        """Compute LN over a batch.
-
-        Parameters
-        ----------
-        pre_sae : [batch, d_hidden]
-            Embedding before SAE layer.
-        sae_weight : [d_sae, d_hidden]
-            Encoder weights of SAE layer.
-        sae_act : [batch, d_sae]
-            Sparse activations (after L1 sparsity but before decoder).
-        """
-        device = pre_sae.device
-        d_sae, d_hidden = sae_weight.shape
-        if self.running_means.numel() == 0:
-            self.running_means = torch.zeros((d_sae, d_hidden), device=device)
-
-        ln_vals = []
-        for b in range(pre_sae.size(0)):
-            active = (sae_act[b] != 0).nonzero(as_tuple=False).squeeze(-1)
-            if active.numel() == 0:
-                continue
-            for j in active.tolist():
-                wj = sae_weight[j]
-                emb_current = pre_sae[b] * wj  # ⊙
-                mean_emb = self.running_means[j]
-                dist = 1 - F.cosine_similarity(mean_emb, emb_current, dim=0, eps=1e-6)
-                ln_vals.append(dist)
-                # momentum update
-                self.running_means[j] = self.momentum * mean_emb + (1 - self.momentum) * pre_sae[b]
-        if not ln_vals:
-            return torch.tensor(0.0, device=device)
-        ln_batch = torch.stack(ln_vals).mean()
-        return self.lambda_ne * ln_batch
-
-# -----------------------------------------------------------------------------
-# 6.  Example usage --------------------------------------------------------------
-# -----------------------------------------------------------------------------
-if __name__ == "__main__":
-    import argparse, json, pathlib
-    from datasets import load_dataset # type: ignore
-    from transformer_lens import HookedTransformer # type: ignore
-
-    parser = argparse.ArgumentParser(description="Demo: collect neuron embeddings for GPT2-small")
-    parser.add_argument('--neuron', type=str, default='blocks.0.mlp', help='Layer name containing target neuron')
-    parser.add_argument('--index', type=int, default=0, help='Neuron index within the layer (row in weight matrix)')
-    parser.add_argument('--out', type=pathlib.Path, default='embeddings.json')
-    args = parser.parse_args()
-
-    # Load model and tiny text dataset
-    model = HookedTransformer.from_pretrained('gpt2-small')
-    ds = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
-    tokenizer = model.tokenizer
-
-    def text_loader(batch_size=4):
-        for start in range(0, len(ds), batch_size):
-            tokens = tokenizer(ds[start:start+batch_size]['text'], return_tensors='pt', padding=True, truncation=True)
-            yield tokens
-
-    collector = EmbeddingCollector(model, args.neuron, args.index)
-    embeds = collector.run(text_loader())
-    labels = cluster_embeddings(embeds)
-    metrics = polysemanticity_metrics(embeds, labels)
-
-    with open(args.out, 'w') as f:
-        json.dump({'metrics': metrics, 'labels': labels.tolist()}, f, indent=2)
-
-    print('Saved', args.out)
