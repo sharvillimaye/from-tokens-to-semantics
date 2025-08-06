@@ -410,6 +410,23 @@ wheels = [
 ]
 
 [[package]]
+name = "hdbscan"
+version = "0.8.40"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "joblib" },
+    { name = "numpy" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c1/84/6b010387b795f774e1ec695df3c8660c15abd041783647d5e7e4076bfc6b/hdbscan-0.8.40.tar.gz", hash = "sha256:c9e383ff17beee0591075ff65d524bda5b5a35dfb01d218245a7ba30c8d48a17", size = 6904096, upload-time = "2024-11-18T16:14:05.384Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/6b/88b8c8023c0c0b27589ad83c82084a1b751917a3e09bdf7fcacf7e6bd523/hdbscan-0.8.40-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:5e958f0d7a33cd2b5e8e927b47f7360bf8a3e7d72355dd65a701e8aabe407b27", size = 1491349, upload-time = "2024-11-18T16:16:10.666Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/ef/32c8a0b3dc6e6c4e433b85b30c3723d8eb48d115c0185b82ab89e1a0ef89/hdbscan-0.8.40-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6e0d6197ee045b173e1f16e6884386f335a56091e373a839dd24f7331a8fa9ed", size = 4576215, upload-time = "2024-11-18T16:14:11.241Z" },
+    { url = "https://files.pythonhosted.org/packages/64/b1/96c347c7740efa1ac803be64155159284f92fafcff88c1077344e64eead5/hdbscan-0.8.40-cp311-cp311-win_amd64.whl", hash = "sha256:127cbe8c858dc77adfde33a3e1ce4f3bea810f78b01d2bd47b1147d4b5a50472", size = 732173, upload-time = "2024-11-18T16:18:40.361Z" },
+]
+
+[[package]]
 name = "hf-xet"
 version = "1.1.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1469,6 +1486,7 @@ name = "superposition-timeline"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "hdbscan" },
     { name = "matplotlib" },
     { name = "nnsight" },
     { name = "numpy" },
@@ -1477,6 +1495,7 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "seaborn" },
+    { name = "tokengrams" },
     { name = "torch" },
     { name = "tqdm" },
     { name = "transformer-lens" },
@@ -1485,6 +1504,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "hdbscan", specifier = ">=0.8.40" },
     { name = "matplotlib", specifier = ">=3.10.3" },
     { name = "nnsight", specifier = ">=0.4.11" },
     { name = "numpy", specifier = ">=2.3.2" },
@@ -1493,6 +1513,7 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.7.1" },
     { name = "scipy", specifier = ">=1.16.1" },
     { name = "seaborn", specifier = ">=0.13.2" },
+    { name = "tokengrams", specifier = ">=0.3.3" },
     { name = "torch", specifier = ">=2.7.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "transformer-lens", specifier = ">=2.15.4" },
@@ -1518,6 +1539,24 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b7/4d/08c89e34946fce2aec4fbb45c9016efd5f4d7f24af8e5d93296e935631d8/threadpoolctl-3.6.0.tar.gz", hash = "sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e", size = 21274, upload-time = "2025-03-13T13:49:23.031Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl", hash = "sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb", size = 18638, upload-time = "2025-03-13T13:49:21.846Z" },
+]
+
+[[package]]
+name = "tokengrams"
+version = "0.3.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "datasets" },
+    { name = "numpy" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9a/39/45cb19e029750cddbefac71860791a9db556459ca895574e9485f6fdd7fc/tokengrams-0.3.3.tar.gz", hash = "sha256:94b03a4755416b7e24d334dc3a1c369c34823b0e516f4a1d11cb8b401a7aa725", size = 1210118, upload-time = "2024-09-02T04:08:05.915Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/c6/bafe808bd57d74d00d4d4054099a72116f8c7af50e978cdc148aa7ff2336/tokengrams-0.3.3-cp311-cp311-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:340d9cad5ed5e95ddeb6b014f55483f944a30e3f915da85e2c195d56606fc987", size = 2280685, upload-time = "2024-09-02T04:07:59.297Z" },
+    { url = "https://files.pythonhosted.org/packages/17/39/0b95fd06c4ca1f6e23c2e4c0b088452cddb8308a540d0ddead3184555fd7/tokengrams-0.3.3-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:bcce30a79d835b328664a1c9fff83e8307895ee700d47a115dad0fde3bcd9d5c", size = 1801480, upload-time = "2024-09-02T04:30:40.441Z" },
+    { url = "https://files.pythonhosted.org/packages/08/8a/04be29daf9cc3150df07fed38cebb8f44407042046a74f94e7c6d55c8c58/tokengrams-0.3.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:bb88191f078a4a384807030197247870804b0ab83c2b67c6bacacf0d0db7520b", size = 1803080, upload-time = "2024-09-02T04:08:01.588Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/26/7b994f9c06919faaea736de45d40cde0203e0a4004ee1a0727b6792dba0f/tokengrams-0.3.3-cp311-none-win_amd64.whl", hash = "sha256:06999438ffa6d7cd79aee7efc4081ee8d04a5bedf60eab37357010bdf869d067", size = 1620174, upload-time = "2024-09-02T04:08:03.822Z" },
 ]
 
 [[package]]

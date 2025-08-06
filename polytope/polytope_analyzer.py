@@ -23,36 +23,883 @@ try:
 except ImportError:
     PLOTTING_AVAILABLE = False
 
+# Required imports for advanced polytope analysis
+from hdbscan import HDBSCAN
+from scipy.spatial import ConvexHull, Delaunay
+from scipy.spatial.distance import cdist
+from scipy.optimize import linprog
+
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
+class SplineCodeGenerator:
+    """
+    Generates spline codes using CETT (Cumulative Error Tail Threshold) methodology.
+    
+    Spline codes are binary vectors indicating which neurons activate above threshold:
+    - 1 where polytope causes neuron to activate above CETT threshold
+    - 0 otherwise
+    """
+    
+    def __init__(self, cett_target: float = 0.01):
+        """
+        Initialize spline code generator.
+        
+        Args:
+            cett_target: Target CETT value (0.01 = 1% error tolerance)
+        """
+        self.cett_target = cett_target
+    
+    def compute_cett_threshold(self, activation_vector: np.ndarray) -> float:
+        """
+        Compute CETT-based threshold for activation vector.
+        
+        Uses binary search to find optimal threshold achieving target CETT.
+        CETT = ||tail_activations|| / ||total_activations||
+        
+        Args:
+            activation_vector: Neural activation vector
+            
+        Returns:
+            Optimal threshold value
+        """
+        magnitudes = np.abs(activation_vector)
+        total_norm = np.linalg.norm(activation_vector)
+        
+        if total_norm == 0:
+            return 0.0
+        
+        # Binary search for optimal threshold
+        sorted_magnitudes = np.sort(magnitudes)
+        left, right = 0, len(sorted_magnitudes) - 1
+        best_threshold = 0.0
+        
+        while left <= right:
+            mid = (left + right) // 2
+            threshold = sorted_magnitudes[mid]
+            
+            # Compute CETT for this threshold
+            below_threshold_mask = magnitudes < threshold
+            tail_norm = np.linalg.norm(activation_vector * below_threshold_mask)
+            current_cett = tail_norm / total_norm
+            
+            if current_cett <= self.cett_target:
+                best_threshold = threshold
+                left = mid + 1
+            else:
+                right = mid - 1
+        
+        return best_threshold
+    
+    def generate_spline_code(self, activation_vector: np.ndarray) -> np.ndarray:
+        """
+        Generate spline code from activation vector using CETT threshold.
+        
+        Args:
+            activation_vector: Neural activation vector
+            
+        Returns:
+            Binary spline code with 1 where neuron activates above CETT threshold
+        """
+        threshold = self.compute_cett_threshold(activation_vector)
+        return (np.abs(activation_vector) > threshold).astype(int)
+    
+    def batch_generate_spline_codes(self, preactivations_batch: np.ndarray) -> np.ndarray:
+        """
+        Generate spline codes for batch of inputs.
+        
+        Args:
+            preactivations_batch: Batch of preactivations (N, M)
+            
+        Returns:
+            Batch of spline codes (N, M)
+        """
+        return (preactivations_batch > self.activation_threshold).astype(int)
+    
+    def compute_spline_code_distance(self, code1: np.ndarray, code2: np.ndarray) -> int:
+        """
+        Compute Hamming distance between two spline codes.
+        
+        Args:
+            code1, code2: Binary spline codes
+            
+        Returns:
+            Hamming distance (number of differing bits)
+        """
+        return np.sum(code1 != code2)
+    
+    def find_unique_spline_codes(self, spline_codes: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Find unique spline codes and their indices.
+        
+        Args:
+            spline_codes: Batch of spline codes (N, M)
+            
+        Returns:
+            (unique_codes, unique_indices)
+        """
+        unique_codes, unique_indices = np.unique(spline_codes, axis=0, return_index=True)
+        return unique_codes, unique_indices
+
+
+class HyperplaneIntersection:
+    """
+    Implements hyperplane intersection algorithms for polytope boundary detection.
+    """
+    
+    def __init__(self, epsilon: float = 1e-12):
+        self.epsilon = epsilon
+    
+    def hyperbox_hyperplane_intersection(self, vertices: np.ndarray, hyperplane_normal: np.ndarray, 
+                                       hyperplane_bias: float) -> np.ndarray:
+        """
+        Compute intersection of hyperbox with hyperplane using border node method.
+        
+        Args:
+            vertices: Vertices of hyperbox (N, D)
+            hyperplane_normal: Normal vector of hyperplane (D,)
+            hyperplane_bias: Bias term b in hyperplane equation N·x = b
+            
+        Returns:
+            Intersection vertices (K, D)
+        """
+        if len(vertices) == 0:
+            return np.array([])
+        
+        # Compute signed distances to hyperplane
+        distances = np.dot(vertices, hyperplane_normal) - hyperplane_bias
+        
+        # Find vertices on opposite sides
+        positive_mask = distances > self.epsilon
+        negative_mask = distances < -self.epsilon
+        on_plane_mask = np.abs(distances) <= self.epsilon
+        
+        intersection_vertices = []
+        
+        # Add vertices already on the hyperplane
+        intersection_vertices.extend(vertices[on_plane_mask])
+        
+        # Find intersection points along edges
+        for i in range(len(vertices)):
+            for j in range(i + 1, len(vertices)):
+                # Check if edge crosses hyperplane
+                if (positive_mask[i] and negative_mask[j]) or (negative_mask[i] and positive_mask[j]):
+                    # Compute intersection point
+                    t = distances[i] / (distances[i] - distances[j])
+                    intersection_point = vertices[i] + t * (vertices[j] - vertices[i])
+                    intersection_vertices.append(intersection_point)
+        
+        if len(intersection_vertices) == 0:
+            return np.array([])
+        
+        return np.array(intersection_vertices)
+    
+    def split_polytope_by_hyperplane(self, vertices: np.ndarray, hyperplane_normal: np.ndarray,
+                                   hyperplane_bias: float) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Split polytope into two parts using hyperplane (SplitPlane algorithm).
+        
+        Args:
+            vertices: Polytope vertices (N, D)
+            hyperplane_normal: Normal vector (D,)
+            hyperplane_bias: Bias term
+            
+        Returns:
+            (vertices_positive_side, vertices_negative_side)
+        """
+        distances = np.dot(vertices, hyperplane_normal) - hyperplane_bias
+        
+        # Find intersection points
+        intersection_points = []
+        
+        # Add existing vertices on hyperplane
+        on_plane_mask = np.abs(distances) <= self.epsilon
+        intersection_points.extend(vertices[on_plane_mask])
+        
+        # Find edge intersections
+        for i in range(len(vertices)):
+            for j in range(i + 1, len(vertices)):
+                if distances[i] * distances[j] < 0:  # Edge crosses plane
+                    t = distances[i] / (distances[i] - distances[j])
+                    intersection_point = vertices[i] + t * (vertices[j] - vertices[i])
+                    intersection_points.append(intersection_point)
+        
+        intersection_array = np.array(intersection_points) if intersection_points else np.array([])
+        
+        # Split vertices by side
+        positive_vertices = vertices[distances > self.epsilon]
+        negative_vertices = vertices[distances < -self.epsilon]
+        
+        # Combine with intersection points
+        if len(intersection_array) > 0:
+            positive_side = np.vstack([positive_vertices, intersection_array]) if len(positive_vertices) > 0 else intersection_array
+            negative_side = np.vstack([negative_vertices, intersection_array]) if len(negative_vertices) > 0 else intersection_array
+        else:
+            positive_side = positive_vertices
+            negative_side = negative_vertices
+        
+        return positive_side, negative_side
+
+
+class VRepresentationManager:
+    """
+    Manages vertex representation (V-representation) of polytopes.
+    """
+    
+    def __init__(self, epsilon: float = 1e-12):
+        self.epsilon = epsilon
+    
+    def compute_convex_hull(self, points: np.ndarray) -> np.ndarray:
+        """
+        Compute convex hull vertices using scipy.
+        
+        Args:
+            points: Input points (N, D)
+            
+        Returns:
+            Hull vertices (K, D)
+        """
+        if len(points) < 3:
+            return points
+        
+        hull = ConvexHull(points)
+        return points[hull.vertices]
+    
+
+    
+    def get_vertices_counter_clockwise(self, vertices: np.ndarray) -> np.ndarray:
+        """
+        Order 2D vertices in counter-clockwise order.
+        
+        Args:
+            vertices: 2D vertices (N, 2)
+            
+        Returns:
+            Counter-clockwise ordered vertices
+        """
+        if vertices.shape[1] != 2:
+            return vertices  # Only works for 2D
+        
+        # Compute centroid
+        centroid = np.mean(vertices, axis=0)
+        
+        # Compute angles from centroid
+        angles = np.arctan2(vertices[:, 1] - centroid[1], vertices[:, 0] - centroid[0])
+        
+        # Sort by angle
+        sorted_indices = np.argsort(angles)
+        return vertices[sorted_indices]
+    
+    def compute_edges(self, vertices: np.ndarray) -> List[Tuple[int, int]]:
+        """
+        Compute edges of 2D polytope.
+        
+        Args:
+            vertices: 2D vertices in counter-clockwise order
+            
+        Returns:
+            List of edge pairs (vertex indices)
+        """
+        if vertices.shape[1] != 2:
+            logger.warning("Edge computation only implemented for 2D")
+            return []
+        
+        n_vertices = len(vertices)
+        edges = [(i, (i + 1) % n_vertices) for i in range(n_vertices)]
+        return edges
+    
+    def compute_facets(self, vertices: np.ndarray) -> List[np.ndarray]:
+        """
+        Compute facets (faces) of polytope.
+        
+        Args:
+            vertices: Polytope vertices
+            
+        Returns:
+            List of facet vertex arrays
+        """
+        try:
+            hull = ConvexHull(vertices)
+            facets = []
+            for simplex in hull.simplices:
+                facets.append(vertices[simplex])
+            return facets
+        except Exception:
+            return []
+
+
+class SyReNNBoundaryDetector:
+    """
+    Implements SyReNN algorithms for exact polytope boundary detection.
+    Based on ExtendPWL and SplitPlane algorithms.
+    """
+    
+    def __init__(self, epsilon: float = 1e-12):
+        self.epsilon = epsilon
+        self.hyperplane_intersection = HyperplaneIntersection(epsilon)
+        self.v_rep = VRepresentationManager(epsilon)
+    
+    def extend_pwl(self, input_polytopes: List[np.ndarray], 
+                   hyperplanes: List[Tuple[np.ndarray, float]]) -> List[np.ndarray]:
+        """
+        ExtendPWL Algorithm: Extend piecewise linear function through layer.
+        
+        Args:
+            input_polytopes: List of polytope vertex arrays from previous layer
+            hyperplanes: List of (normal, bias) pairs defining activation boundaries
+            
+        Returns:
+            Refined polytope partition as list of vertex arrays
+        """
+        # Initialize work queue with input polytopes
+        work_queue = input_polytopes.copy()
+        result_polytopes = []
+        
+        while work_queue:
+            current_polytope = work_queue.pop(0)
+            
+            if len(current_polytope) == 0:
+                continue
+            
+            # Check if any hyperplane splits this polytope
+            split_occurred = False
+            
+            for hyperplane_normal, hyperplane_bias in hyperplanes:
+                # Check if polytope vertices lie on opposite sides of hyperplane
+                distances = np.dot(current_polytope, hyperplane_normal) - hyperplane_bias
+                
+                has_positive = np.any(distances > self.epsilon)
+                has_negative = np.any(distances < -self.epsilon)
+                
+                if has_positive and has_negative:
+                    # Split the polytope
+                    positive_side, negative_side = self.hyperplane_intersection.split_polytope_by_hyperplane(
+                        current_polytope, hyperplane_normal, hyperplane_bias
+                    )
+                    
+                    # Add split polytopes back to work queue
+                    if len(positive_side) > 0:
+                        work_queue.append(positive_side)
+                    if len(negative_side) > 0:
+                        work_queue.append(negative_side)
+                    
+                    split_occurred = True
+                    break
+            
+            # If no hyperplane splits this polytope, add to results
+            if not split_occurred:
+                result_polytopes.append(current_polytope)
+        
+        return result_polytopes
+    
+    def split_plane_2d(self, vertices: np.ndarray, hyperplane_normal: np.ndarray, 
+                      hyperplane_bias: float) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        SplitPlane algorithm for 2D polytopes.
+        
+        Args:
+            vertices: 2D polytope vertices (N, 2)
+            hyperplane_normal: Normal vector (2,)
+            hyperplane_bias: Bias term
+            
+        Returns:
+            (vertices_A, vertices_B) for split polytopes
+        """
+        if vertices.shape[1] != 2:
+            raise ValueError("SplitPlane2D only works for 2D vertices")
+        
+        # Order vertices counter-clockwise
+        vertices_ccw = self.v_rep.get_vertices_counter_clockwise(vertices)
+        distances = np.dot(vertices_ccw, hyperplane_normal) - hyperplane_bias
+        
+        # Find intersection points
+        intersection_points = []
+        n_vertices = len(vertices_ccw)
+        
+        for i in range(n_vertices):
+            j = (i + 1) % n_vertices
+            
+            # Check if edge crosses hyperplane
+            if distances[i] * distances[j] < 0:
+                # Compute intersection
+                t = distances[i] / (distances[i] - distances[j])
+                intersection_point = vertices_ccw[i] + t * (vertices_ccw[j] - vertices_ccw[i])
+                intersection_points.append(intersection_point)
+        
+        if len(intersection_points) < 2:
+            # No proper split possible
+            return vertices_ccw, np.array([])
+        
+        # Take first two intersection points
+        p1, p2 = intersection_points[0], intersection_points[1]
+        
+        # Create split polytopes
+        vertices_A = []
+        vertices_B = []
+        
+        # Add intersection points to both
+        vertices_A.extend([p1, p2])
+        vertices_B.extend([p1, p2])
+        
+        # Distribute original vertices by side
+        for i, vertex in enumerate(vertices_ccw):
+            if distances[i] > self.epsilon:
+                vertices_A.append(vertex)
+            elif distances[i] < -self.epsilon:
+                vertices_B.append(vertex)
+            # Vertices on hyperplane are already included via intersections
+        
+        # Compute convex hulls
+        hull_A = self.v_rep.compute_convex_hull(np.array(vertices_A)) if vertices_A else np.array([])
+        hull_B = self.v_rep.compute_convex_hull(np.array(vertices_B)) if vertices_B else np.array([])
+        
+        return hull_A, hull_B
+    
+    def split_hyperplane_kd(self, vertices: np.ndarray, hyperplane_normal: np.ndarray,
+                           hyperplane_bias: float) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        SplitHyperPlane algorithm for k-dimensional polytopes (k > 2).
+        
+        Args:
+            vertices: k-D polytope vertices
+            hyperplane_normal: Normal vector
+            hyperplane_bias: Bias term
+            
+        Returns:
+            Split polytopes
+        """
+        if vertices.shape[1] == 2:
+            return self.split_plane_2d(vertices, hyperplane_normal, hyperplane_bias)
+        
+        # For higher dimensions, use general splitting approach
+        return self.hyperplane_intersection.split_polytope_by_hyperplane(
+            vertices, hyperplane_normal, hyperplane_bias
+        )
+
+
+class SemanticRegionAnalyzer:
+    """
+    Implements HDBSCAN clustering for semantic polytope region identification.
+    """
+    
+    def __init__(self, min_cluster_size: int = 5, min_samples: int = 3):
+        self.min_cluster_size = min_cluster_size
+        self.min_samples = min_samples
+    
+    def cluster_spline_codes(self, spline_codes: np.ndarray) -> Tuple[np.ndarray, Dict]:
+        """
+        Cluster spline codes to identify semantic regions using HDBSCAN.
+        
+        Implementation of HDBSCAN methodology:
+        1. Compute mutual reachability distances
+        2. Build minimum spanning tree  
+        3. Build cluster hierarchy
+        4. Extract stable clusters
+        
+        Args:
+            spline_codes: Binary spline codes (N, M)
+            
+        Returns:
+            (cluster_labels, clustering_info)
+        """
+        if len(spline_codes) == 0:
+            raise ValueError("No spline codes provided for clustering")
+        
+        # Use Hamming distance for binary spline codes
+        clusterer = HDBSCAN(
+            min_cluster_size=self.min_cluster_size,
+            min_samples=self.min_samples,
+            metric='hamming',
+            cluster_selection_method='eom'  # Excess of Mass for stability
+        )
+        
+        cluster_labels = clusterer.fit_predict(spline_codes)
+        
+        # Compute clustering quality metrics
+        n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+        n_noise = np.sum(cluster_labels == -1)
+        
+        clustering_info = {
+            'n_clusters': n_clusters,
+            'n_noise_points': n_noise,
+            'cluster_sizes': [np.sum(cluster_labels == i) for i in range(n_clusters)],
+            'clustering_efficiency': 1.0 - (n_noise / len(cluster_labels)) if len(cluster_labels) > 0 else 0.0,
+            'probabilities': getattr(clusterer, 'probabilities_', None)
+        }
+        
+        return cluster_labels, clustering_info
+    
+
+    
+    def identify_monosemantic_regions(self, spline_codes: np.ndarray, 
+                                    cluster_labels: np.ndarray) -> Dict[int, Dict]:
+        """
+        Identify regions where single semantic concepts are represented.
+        
+        Args:
+            spline_codes: Binary spline codes (N, M)
+            cluster_labels: Cluster assignments from HDBSCAN
+            
+        Returns:
+            Dictionary mapping cluster_id to region properties
+        """
+        regions = {}
+        
+        for cluster_id in set(cluster_labels):
+            if cluster_id == -1:  # Skip noise
+                continue
+            
+            cluster_mask = cluster_labels == cluster_id
+            cluster_codes = spline_codes[cluster_mask]
+            
+            if len(cluster_codes) == 0:
+                continue
+            
+            # Compute region properties
+            region_center = np.mean(cluster_codes, axis=0)
+            region_variance = np.var(cluster_codes, axis=0)
+            region_sparsity = np.mean(cluster_codes)
+            
+            # Measure semantic coherence (lower variance = more coherent)
+            coherence = 1.0 / (1.0 + np.mean(region_variance))
+            
+            # Identify active neuron patterns
+            active_neurons = np.where(region_center > 0.5)[0]
+            
+            regions[cluster_id] = {
+                'size': len(cluster_codes),
+                'center': region_center,
+                'variance': region_variance,
+                'sparsity': region_sparsity,
+                'coherence': coherence,
+                'active_neurons': active_neurons,
+                'is_monosemantic': coherence > 0.7 and len(active_neurons) < 10
+            }
+        
+        return regions
+    
+    def compute_boundary_density(self, spline_codes: np.ndarray, 
+                                cluster_labels: np.ndarray) -> np.ndarray:
+        """
+        Compute density of polytope boundaries for semantic transition detection.
+        
+        Args:
+            spline_codes: Binary spline codes
+            cluster_labels: Cluster assignments
+            
+        Returns:
+            Boundary density for each point
+        """
+        n_points = len(spline_codes)
+        boundary_density = np.zeros(n_points)
+        
+        for i in range(n_points):
+            if cluster_labels[i] == -1:  # Noise points have high boundary density
+                boundary_density[i] = 1.0
+                continue
+            
+            # Count neighbors from different clusters
+            different_cluster_neighbors = 0
+            total_neighbors = 0
+            
+            for j in range(n_points):
+                if i == j:
+                    continue
+                
+                # Compute Hamming distance
+                hamming_dist = np.sum(spline_codes[i] != spline_codes[j])
+                
+                if hamming_dist <= 3:  # Consider as neighbor
+                    total_neighbors += 1
+                    if cluster_labels[j] != cluster_labels[i]:
+                        different_cluster_neighbors += 1
+            
+            if total_neighbors > 0:
+                boundary_density[i] = different_cluster_neighbors / total_neighbors
+        
+        return boundary_density
+
+
+class MASOFramework:
+    """
+    Max-Affine Spline Operator (MASO) framework for template matching and feature analysis.
+    """
+    
+    def __init__(self, epsilon: float = 1e-8):
+        self.epsilon = epsilon
+    
+    def extract_template(self, network_gradient: np.ndarray, input_point: np.ndarray,
+                        network_output: np.ndarray) -> Dict[str, np.ndarray]:
+        """
+        Extract template from network gradient for given input.
+        
+        Args:
+            network_gradient: Gradient d[network_output]/dx (C, D) for C classes, D dimensions
+            input_point: Input point (D,)
+            network_output: Network output (C,)
+            
+        Returns:
+            Template information
+        """
+        templates = {}
+        
+        for class_idx in range(len(network_output)):
+            template_c = network_gradient[class_idx]  # A[x]_c
+            bias_c = network_output[class_idx] - np.dot(template_c, input_point)  # b[x]_c
+            
+            templates[f'class_{class_idx}'] = {
+                'template': template_c,
+                'bias': bias_c,
+                'activation': network_output[class_idx]
+            }
+        
+        return templates
+    
+    def compute_maso_operator(self, input_point: np.ndarray, templates: Dict[str, Dict]) -> Dict:
+        """
+        Compute MASO operator S[A, B](x) = A[x]·x + B[x].
+        
+        Args:
+            input_point: Input point x
+            templates: Template dictionary from extract_template
+            
+        Returns:
+            MASO computation results
+        """
+        class_activations = {}
+        
+        for class_name, template_info in templates.items():
+            A_x = template_info['template']  # Signal-dependent transformation
+            B_x = template_info['bias']      # Signal-dependent bias
+            
+            activation = np.dot(A_x, input_point) + B_x
+            class_activations[class_name] = activation
+        
+        # Find winning region (max activation)
+        winning_class = max(class_activations.keys(), key=lambda k: class_activations[k])
+        
+        return {
+            'activations': class_activations,
+            'winning_class': winning_class,
+            'winning_activation': class_activations[winning_class]
+        }
+    
+    def analyze_semantic_content(self, templates: Dict[str, Dict], 
+                               feature_names: Optional[List[str]] = None) -> Dict:
+        """
+        Analyze semantic content of templates through visualization analysis.
+        
+        Args:
+            templates: Template dictionary
+            feature_names: Optional names for features
+            
+        Returns:
+            Semantic analysis results
+        """
+        analysis = {}
+        
+        for class_name, template_info in templates.items():
+            template = template_info['template']
+            
+            # Find most important features (highest absolute values)
+            feature_importance = np.abs(template)
+            top_features = np.argsort(feature_importance)[-10:][::-1]  # Top 10 features
+            
+            # Compute template statistics
+            template_stats = {
+                'norm': np.linalg.norm(template),
+                'sparsity': np.mean(np.abs(template) < self.epsilon),
+                'max_magnitude': np.max(np.abs(template)),
+                'top_features': top_features.tolist(),
+                'top_feature_values': template[top_features].tolist()
+            }
+            
+            if feature_names:
+                template_stats['top_feature_names'] = [feature_names[i] for i in top_features]
+            
+            analysis[class_name] = template_stats
+        
+        return analysis
+
+
+class SafetyPolytopeManager:
+    """
+    Safety Polytope (SaP) implementation for LLM safety enforcement.
+    """
+    
+    def __init__(self, epsilon: float = 1e-8):
+        self.epsilon = epsilon
+        self.safety_constraints = []  # List of (A, b) pairs for Ax <= b
+    
+    def learn_safety_polytope(self, safe_activations: np.ndarray, 
+                             unsafe_activations: np.ndarray) -> Dict:
+        """
+        Learn polytope boundaries that separate safe from unsafe regions.
+        
+        Args:
+            safe_activations: Safe activation patterns (N_safe, D)
+            unsafe_activations: Unsafe activation patterns (N_unsafe, D)
+            
+        Returns:
+            Learned constraint parameters
+        """
+
+        
+        # Use linear programming to find separating hyperplane
+        from scipy.optimize import linprog
+        
+        n_safe, n_dims = safe_activations.shape
+        n_unsafe = len(unsafe_activations)
+        
+        # Formulate as linear program: find w, b such that
+        # w^T * x_safe + b <= -1 (safe side)
+        # w^T * x_unsafe + b >= 1 (unsafe side)
+        
+        # Variables: [w (n_dims), b (1), slack_variables (n_safe + n_unsafe)]
+        c = np.zeros(n_dims + 1 + n_safe + n_unsafe)
+        c[n_dims + 1:] = 1.0  # Minimize slack variables
+        
+        # Inequality constraints: -w^T * x_safe - b - slack_safe <= -1
+        #                        w^T * x_unsafe + b - slack_unsafe >= 1
+        A_ineq = []
+        b_ineq = []
+        
+        # Safe constraints: -w^T * x_safe - b - slack <= -1
+        for i, x_safe in enumerate(safe_activations):
+            constraint = np.zeros(n_dims + 1 + n_safe + n_unsafe)
+            constraint[:n_dims] = -x_safe
+            constraint[n_dims] = -1  # -b
+            constraint[n_dims + 1 + i] = -1  # -slack_safe
+            A_ineq.append(constraint)
+            b_ineq.append(-1)
+        
+        # Unsafe constraints: -w^T * x_unsafe - b + slack >= -1 (flipped to <=)
+        for i, x_unsafe in enumerate(unsafe_activations):
+            constraint = np.zeros(n_dims + 1 + n_safe + n_unsafe)
+            constraint[:n_dims] = x_unsafe
+            constraint[n_dims] = 1  # b
+            constraint[n_dims + 1 + n_safe + i] = -1  # -slack_unsafe
+            A_ineq.append(constraint)
+            b_ineq.append(-1)
+        
+        A_ineq = np.array(A_ineq)
+        b_ineq = np.array(b_ineq)
+        
+        try:
+            result = linprog(c, A_ub=A_ineq, b_ub=b_ineq, method='highs')
+            
+            if result.success:
+                w = result.x[:n_dims]
+                b = result.x[n_dims]
+                
+                self.safety_constraints.append((w.reshape(1, -1), np.array([b])))
+                
+                return {
+                    'hyperplane_normal': w,
+                    'hyperplane_bias': b,
+                    'optimization_success': True,
+                    'slack_violation': np.sum(result.x[n_dims + 1:])
+                }
+            else:
+                raise RuntimeError("Safety polytope optimization failed")
+                
+        except Exception as e:
+            raise RuntimeError(f"Safety polytope learning failed: {e}")
+    
+
+    
+    def project_to_safe_region(self, unsafe_activation: np.ndarray) -> np.ndarray:
+        """
+        Project unsafe activation to nearest safe region boundary.
+        
+        Args:
+            unsafe_activation: Unsafe activation pattern
+            
+        Returns:
+            Projected safe activation
+        """
+        current_activation = unsafe_activation.copy()
+        
+        for A, b in self.safety_constraints:
+            # Check if point violates constraint Ax <= b
+            constraint_value = np.dot(A, current_activation.reshape(-1, 1)).flatten()
+            
+            if np.any(constraint_value > b):
+                # Project to constraint boundary
+                for i, (a_i, b_i) in enumerate(zip(A, b)):
+                    if constraint_value[i] > b_i:
+                        # Project along normal direction
+                        violation = constraint_value[i] - b_i
+                        projection = violation / (np.dot(a_i, a_i) + self.epsilon)
+                        current_activation -= projection * a_i
+        
+        return current_activation
+    
+    def is_safe(self, activation: np.ndarray) -> bool:
+        """
+        Check if activation satisfies all safety constraints.
+        
+        Args:
+            activation: Activation pattern to check
+            
+        Returns:
+            True if safe, False otherwise
+        """
+        for A, b in self.safety_constraints:
+            constraint_value = np.dot(A, activation.reshape(-1, 1)).flatten()
+            if np.any(constraint_value > b + self.epsilon):
+                return False
+        return True
+
+
 class PolytopeAnalyzer:
     """
-    Simple, robust polytope analyzer for activation records.
+    Advanced polytope analyzer for LLM activation records with spline codes and boundary detection.
+    
+    Features:
+    - Spline code generation for polytope identification
+    - SyReNN boundary detection algorithms (ExtendPWL, SplitPlane)
+    - HDBSCAN clustering for semantic region identification
+    - MASO framework for template analysis
+    - Safety polytope management
+    - Proper V-representation management
     
     Usage:
         analyzer = PolytopeAnalyzer()
         results = analyzer.analyze_records(activation_records)
     """
     
-    def __init__(self, n_pca_components: float = 0.95, approximation_epsilon: float = 0.05, 
-                 random_seed: Optional[int] = None, dimensionality_reduction: str = "pca"):
+    def __init__(self, n_pca_components: float = 0.95, approximation_epsilon: float = 1e-12, 
+                 random_seed: Optional[int] = None, dimensionality_reduction: str = "pca",
+                 cett_target: float = 0.01, min_cluster_size: int = 5, use_advanced_methods: bool = True):
         """
-        
-        Initialize the analyzer.
+        Initialize the advanced polytope analyzer.
         
         Args:
             n_pca_components: Number of PCA components for dimensionality reduction
-            approximation_epsilon: Tolerance for polytope approximation
+            approximation_epsilon: Numerical precision for geometric computations
             random_seed: Random seed for reproducibility (None for random behavior)
             dimensionality_reduction: Method for dimensionality reduction ('pca', 'none', 'truncate')
+            cett_target: Target CETT value for spline code thresholding (0.01 = 1% error tolerance)
+            min_cluster_size: Minimum cluster size for HDBSCAN clustering
+            use_advanced_methods: Whether to use advanced methods (SyReNN, HDBSCAN, etc.)
         """
         self.n_pca_components = n_pca_components
         self.approximation_epsilon = approximation_epsilon
         self.random_seed = random_seed
         self.dimensionality_reduction = dimensionality_reduction
+        self.use_advanced_methods = use_advanced_methods
+        
+        # Initialize all components
+        self.spline_generator = SplineCodeGenerator(cett_target)
+        self.hyperplane_intersection = HyperplaneIntersection(approximation_epsilon)
+        self.v_rep = VRepresentationManager(approximation_epsilon)
+        self.boundary_detector = SyReNNBoundaryDetector(approximation_epsilon)
+        self.semantic_analyzer = SemanticRegionAnalyzer(min_cluster_size)
+        self.maso_framework = MASOFramework()
+        self.safety_manager = SafetyPolytopeManager()
         
         # Set random seed if provided
         if random_seed is not None:
@@ -328,7 +1175,7 @@ class PolytopeAnalyzer:
 
     def find_hull_vertices(self, points: np.ndarray) -> np.ndarray:
         """
-        Find convex hull vertices using greedy approximation for high-dimensional data.
+        Find convex hull vertices using advanced or fallback methods.
         
         Args:
             points: Input points (n_samples, n_features)
@@ -336,7 +1183,21 @@ class PolytopeAnalyzer:
         Returns:
             Indices of hull vertices
         """
-        # Adaptive epsilon based on data scale
+        if self.use_advanced_methods:
+            # Use proper convex hull computation
+            try:
+                hull_vertices = self.v_rep.compute_convex_hull(points)
+                # Return indices by finding matches in original points
+                indices = []
+                for vertex in hull_vertices:
+                    # Find closest match in original points
+                    distances = np.linalg.norm(points - vertex, axis=1)
+                    indices.append(np.argmin(distances))
+                return np.array(indices)
+            except Exception as e:
+                logger.warning(f"Advanced hull computation failed: {e}, using fallback")
+        
+        # Fallback to original greedy approximation
         adaptive_epsilon = self._compute_adaptive_epsilon(points)
         return self.greedy_hull_approximation(points, epsilon=adaptive_epsilon)
 
@@ -1590,6 +2451,199 @@ class PolytopeAnalyzer:
         logger.info(f"Created {len(figures)} comprehensive visualization plots in {save_dir}")
         return figures
     
+    def analyze_polytope_structure(self, records: List[Dict]) -> Dict[str, Any]:
+        """
+        Comprehensive polytope analysis using advanced methodology.
+        
+        Analysis pipeline:
+        1. Generate spline codes with CETT thresholding
+        2. Cluster spline codes using HDBSCAN  
+        3. Identify polytope regions and compute metrics
+        4. Extract templates using MASO framework
+        5. Perform safety analysis if applicable
+        
+        Args:
+            records: List of validated activation records
+            
+        Returns:
+            Complete polytope analysis results
+        """
+        logger.info(f"Starting polytope structure analysis of {len(records)} records")
+        
+        # Step 1: Generate spline codes
+        activation_vectors = np.array([r['activation_vector'] for r in records])
+        spline_codes = []
+        for activation in activation_vectors:
+            spline_code = self.spline_generator.generate_spline_code(activation)
+            spline_codes.append(spline_code)
+        
+        logger.info(f"Generated {len(spline_codes)} spline codes")
+        
+        # Step 2: Cluster spline codes for semantic regions
+        spline_code_matrix = np.array(spline_codes)
+        cluster_labels, clustering_info = self.semantic_analyzer.cluster_spline_codes(spline_code_matrix)
+        
+        logger.info(f"Identified {clustering_info['n_clusters']} semantic clusters")
+        
+        # Step 3: Create polytope regions
+        polytope_regions = self._create_polytope_regions(
+            activation_vectors, spline_codes, cluster_labels
+        )
+        
+        # Step 4: Extract templates (simplified approach)
+        templates = {}
+        for i, region in enumerate(polytope_regions):
+            if len(region['vertices']) > 0:
+                # Use centroid as representative template
+                centroid = np.mean(region['vertices'], axis=0)
+                template = centroid / (np.linalg.norm(centroid) + 1e-8)
+                templates[f'region_{region["cluster_id"]}'] = template
+        
+        # Step 5: Safety analysis (using high-frequency as safe examples)
+        safety_analysis = self._perform_safety_analysis(records, activation_vectors)
+        
+        # Step 6: Compute comprehensive metrics
+        analysis_metrics = self._compute_analysis_metrics(polytope_regions, clustering_info)
+        
+        return {
+            'spline_codes': spline_codes,
+            'polytope_regions': polytope_regions,
+            'cluster_info': clustering_info,
+            'templates': templates,
+            'safety_analysis': safety_analysis,
+            'metrics': analysis_metrics,
+            'n_records': len(records),
+            'n_regions': len(polytope_regions)
+        }
+    
+    def _create_polytope_regions(self, activation_vectors: np.ndarray, 
+                               spline_codes: List[np.ndarray],
+                               cluster_labels: np.ndarray) -> List[Dict[str, Any]]:
+        """Create polytope regions from clustering results."""
+        regions = []
+        
+        for cluster_id in set(cluster_labels):
+            if cluster_id == -1:  # Skip noise cluster
+                continue
+            
+            # Get spline codes and activations for this cluster
+            cluster_mask = cluster_labels == cluster_id
+            cluster_splines = [spline_codes[i] for i in range(len(spline_codes)) if cluster_mask[i]]
+            cluster_activations = activation_vectors[cluster_mask]
+            
+            if len(cluster_activations) == 0:
+                continue
+            
+            # Create polytope region
+            region = {
+                'vertices': cluster_activations,
+                'spline_codes': cluster_splines,
+                'cluster_id': cluster_id,
+                'semantic_coherence': self._compute_semantic_coherence(cluster_splines),
+                'boundary_density': self._compute_boundary_density(cluster_activations, activation_vectors)
+            }
+            
+            regions.append(region)
+        
+        return regions
+    
+    def _compute_semantic_coherence(self, spline_codes: List[np.ndarray]) -> float:
+        """Compute semantic coherence for a group of spline codes."""
+        if len(spline_codes) < 2:
+            return 1.0
+        
+        similarities = []
+        for i in range(len(spline_codes)):
+            for j in range(i + 1, len(spline_codes)):
+                # Compute similarity (1 - normalized Hamming distance)
+                hamming_dist = np.sum(spline_codes[i] != spline_codes[j])
+                similarity = 1.0 - hamming_dist / len(spline_codes[i])
+                similarities.append(similarity)
+        
+        return np.mean(similarities) if similarities else 0.0
+    
+    def _compute_boundary_density(self, cluster_vertices: np.ndarray, 
+                                all_points: np.ndarray) -> float:
+        """Compute boundary density metric for polytope region."""
+        if len(cluster_vertices) < 3:
+            return 0.0
+        
+        try:
+            # Compute convex hull of cluster
+            hull = ConvexHull(cluster_vertices)
+            hull_vertices = cluster_vertices[hull.vertices]
+            
+            # Compute distances from all points to hull boundary (approximation)
+            distances = cdist(all_points, hull_vertices)
+            min_distances = np.min(distances, axis=1)
+            
+            # Points near boundary (within 20th percentile of distances)
+            threshold = np.percentile(min_distances, 20)
+            near_boundary = np.sum(min_distances <= threshold)
+            
+            return near_boundary / len(all_points)
+            
+        except Exception:
+            return 0.0
+    
+    def _perform_safety_analysis(self, records: List[Dict], 
+                               activation_vectors: np.ndarray) -> Dict[str, Any]:
+        """Perform safety polytope analysis using high-frequency activations as safe examples."""
+        try:
+            # Use high-frequency activations as "safe" examples
+            high_freq_indices = [i for i, r in enumerate(records) if r['category'] == 'high']
+            low_freq_indices = [i for i, r in enumerate(records) if r['category'] == 'low']
+            
+            if len(high_freq_indices) < 4 or len(low_freq_indices) < 4:
+                return {'error': 'Insufficient data for safety analysis'}
+            
+            safe_activations = activation_vectors[high_freq_indices]
+            
+            # Create safety polytope (need to provide unsafe examples too)
+            unsafe_activations = activation_vectors[low_freq_indices]
+            safety_polytope = self.safety_manager.learn_safety_polytope(safe_activations, unsafe_activations)
+            
+            return {
+                'safety_polytope': safety_polytope,
+                'n_safe_examples': len(safe_activations),
+                'analysis_successful': True
+            }
+            
+        except Exception as e:
+            logger.warning(f"Safety analysis failed: {e}")
+            return {'error': str(e), 'analysis_successful': False}
+    
+    def _compute_analysis_metrics(self, regions: List[Dict[str, Any]], 
+                                clustering_info: Dict) -> Dict[str, Any]:
+        """Compute comprehensive analysis metrics."""
+        if not regions:
+            return {'error': 'No polytope regions found'}
+        
+        coherence_scores = [r['semantic_coherence'] for r in regions]
+        boundary_densities = [r['boundary_density'] for r in regions]
+        region_sizes = [len(r['vertices']) for r in regions]
+        
+        return {
+            'semantic_coherence': {
+                'mean': np.mean(coherence_scores),
+                'std': np.std(coherence_scores),
+                'min': np.min(coherence_scores),
+                'max': np.max(coherence_scores)
+            },
+            'boundary_density': {
+                'mean': np.mean(boundary_densities),
+                'std': np.std(boundary_densities),
+                'min': np.min(boundary_densities),
+                'max': np.max(boundary_densities)
+            },
+            'region_statistics': {
+                'n_regions': len(regions),
+                'mean_region_size': np.mean(region_sizes),
+                'total_clustered_points': sum(region_sizes),
+                'clustering_efficiency': clustering_info['clustering_efficiency']
+            }
+        }
+
     def analyze_records(self, records: List[Dict]) -> Dict[str, Any]:
         """
         Main analysis function - analyze activation records for frequency differences.
@@ -1616,7 +2670,10 @@ class PolytopeAnalyzer:
         if len(validated_records) < 4:
             raise ValueError("Need at least 4 valid records for analysis")
         
-        # Run comparison across checkpoints
+        # Run advanced polytope structure analysis
+        polytope_analysis = self.analyze_polytope_structure(validated_records)
+        
+        # Run comparison across checkpoints (backward compatibility)
         analysis_results = self.compare_across_checkpoints(validated_records)
         
         # Create visualizations
@@ -1626,6 +2683,7 @@ class PolytopeAnalyzer:
         summary = self._generate_summary(analysis_results, validated_records)
         
         return {
+            'polytope_analysis': polytope_analysis,
             'analysis_results': analysis_results,
             'figures': figures,
             'summary': summary,

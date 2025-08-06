@@ -18,6 +18,7 @@ from pathlib import Path
 import logging
 from dataclasses import dataclass, asdict
 from enum import Enum
+from transformers import AutoTokenizer
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ class DatasetSource(Enum):
 class NGramConfig:
     """Configuration for n-gram dataset building"""
     n_gram_size: int = 2
-    num_samples: int = 1000
+    num_samples: int = 5000  # Increased for better statistical power
     source: DatasetSource = DatasetSource.PILE
     min_text_length: int = 50
     max_text_length: int = 2000
@@ -125,6 +126,16 @@ class NGramDataset:
         if self.config.random_seed is not None:
             random.seed(self.config.random_seed)
             np.random.seed(self.config.random_seed)
+        
+        # Initialize tokenizer for pre-tokenized datasets
+        self.tokenizer = None
+        if self.config.source == DatasetSource.PILE:
+            try:
+                # Use GPT-NeoX tokenizer (same as Pythia models)
+                self.tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
+                logger.info("Loaded GPT-NeoX tokenizer for pile dataset")
+            except Exception as e:
+                logger.warning(f"Could not load tokenizer: {e}. Will attempt text fallback.")
     
     def stream_huggingface_dataset(self) -> List[str]:
         """Stream texts from HuggingFace datasets"""
@@ -140,9 +151,67 @@ class NGramDataset:
             raise ValueError(f"Unknown dataset source: {self.config.source}")
     
     def _load_pile(self) -> List[str]:
-        """Load from The Pile dataset"""
-        dataset = load_dataset("EleutherAI/pile", split="train", streaming=True)
-        return self._extract_texts(dataset)
+        """Load from The Pile dataset (deduplicated, pre-shuffled version)"""
+        try:
+            # This is pre-tokenized data, need to handle token IDs
+            dataset = load_dataset("EleutherAI/pile-deduped-pythia-preshuffled", split="train", streaming=True)
+            return self._extract_texts_from_tokenized(dataset)
+        except Exception as e:
+            logger.error(f"Failed to load pile-deduped-pythia-preshuffled: {e}")
+            # Fallback to original pile if available
+            try:
+                logger.info("Attempting fallback to original pile dataset...")
+                dataset = load_dataset("EleutherAI/pile", split="train", streaming=True)
+                return self._extract_texts(dataset)
+            except Exception as e2:
+                logger.error(f"Fallback also failed: {e2}")
+                raise ValueError(f"Could not load any Pile dataset variant. Original error: {e}")
+    
+    def _extract_texts_from_tokenized(self, dataset) -> List[str]:
+        """Extract and decode texts from pre-tokenized dataset"""
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer not available for decoding tokenized data")
+        
+        texts = []
+        valid_count = 0
+        
+        with tqdm(total=self.config.num_samples, desc="Loading tokenized texts") as pbar:
+            for sample in dataset:
+                if valid_count >= self.config.num_samples:
+                    break
+                
+                try:
+                    # Handle different possible field names for token IDs
+                    token_ids = sample.get('input_ids') or sample.get('tokens') or sample.get('token_ids')
+                    
+                    if token_ids is None:
+                        # Check if it's already text
+                        text = sample.get('text') or sample.get('content', '')
+                        if text:
+                            texts.append(text.strip())
+                            valid_count += 1
+                            pbar.update(1)
+                        continue
+                    
+                    # Decode token IDs to text
+                    if isinstance(token_ids, (list, tuple)) and len(token_ids) > 0:
+                        # Handle chunked token sequences (limit to reasonable size)
+                        max_tokens = min(2048, len(token_ids))  # Limit to 2K tokens per sample
+                        decoded_text = self.tokenizer.decode(token_ids[:max_tokens], skip_special_tokens=True)
+                        
+                        # Apply length filters
+                        text_len = len(decoded_text.strip())
+                        if self.config.min_text_length <= text_len <= self.config.max_text_length:
+                            texts.append(decoded_text.strip())
+                            valid_count += 1
+                            pbar.update(1)
+                
+                except Exception as e:
+                    logger.debug(f"Error processing sample: {e}")
+                    continue
+        
+        logger.info(f"Decoded {len(texts)} valid texts from tokenized dataset")
+        return texts
     
     def _load_openwebtext(self) -> List[str]:
         """Load from OpenWebText dataset"""  
@@ -567,7 +636,7 @@ class NGramDataset:
         logger.info(f"Created dataset with {len(dataset['texts'])} samples")
         return dataset
     
-    def create_stratified_dataset(self, target_samples_per_group: int = 50) -> Dict[str, Any]:
+    def create_stratified_dataset(self, target_samples_per_group: int = 500) -> Dict[str, Any]:
         """
         Create a stratified dataset with balanced examples across semantic categories and frequency groups
         
@@ -787,7 +856,7 @@ def prepare_for_checkpoint_analysis(dataset: Dict[str, Any]) -> Dict[str, Any]:
 
 def extract_experiment_subsets(dataset: Dict[str, Any], 
                               target_categories: List[str] = None,
-                              samples_per_group: int = 50) -> Dict[str, Dict[str, Any]]:
+                              samples_per_group: int = 500) -> Dict[str, Dict[str, Any]]:
     """
     Extract balanced subsets for experiments by semantic category and frequency
     
@@ -911,9 +980,9 @@ def build_stratified_ngram_dataset(n_gram_size: int = 2,
     return builder.create_stratified_dataset(samples_per_group)
 
 
-def build_country_capital_dataset(num_samples: int = 200,
+def build_country_capital_dataset(num_samples: int = 1000,
                                  include_mixed_sizes: bool = True,
-                                 samples_per_group: int = 50) -> Dict[str, Any]:
+                                 samples_per_group: int = 500) -> Dict[str, Any]:
     """Build country-capital relationship dataset with mixed n-gram sizes"""
     config = NGramConfig(
         n_gram_size=2,  # Base size, but will include 1,2,3-grams if mixed

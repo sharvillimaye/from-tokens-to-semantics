@@ -30,6 +30,7 @@ dependencies = [
     "transformer-lens>=2.15.4",
     "transformers>=4.54.0",
     "tokengrams>=0.3.3",
+    "hdbscan>=0.8.40",
 ]
 
 
