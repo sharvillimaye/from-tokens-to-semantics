@@ -185,3 +185,5 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+# Ignore generated caches and analysis outputs
+cache/
