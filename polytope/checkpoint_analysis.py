@@ -76,6 +76,7 @@ def create_activation_record(checkpoint_step: str,
                            char_end: int,
                            activation_vector: np.ndarray,
                            neuron_idx: Optional[int] = None,
+                           spline_code: Optional[np.ndarray] = None,
                            **kwargs) -> Dict[str, Any]:
     """Create a structured activation record as dictionary"""
     
@@ -86,7 +87,7 @@ def create_activation_record(checkpoint_step: str,
     activation_norm = np.linalg.norm(activation_vector)
     n_active_neurons = np.sum(binary_pattern)
     
-    return {
+    record = {
         'checkpoint_step': checkpoint_step,
         'text_idx': text_idx,
         'text': text,
@@ -107,6 +108,9 @@ def create_activation_record(checkpoint_step: str,
         'n_active_neurons': n_active_neurons,
         'metadata': kwargs
     }
+    if spline_code is not None:
+        record['spline_code'] = spline_code
+    return record
 
 
 def organize_records_by_key(records: List[Dict[str, Any]], key: str) -> Dict[Any, List[Dict[str, Any]]]:
@@ -270,7 +274,8 @@ def extract_layer_activations(model: LanguageModel,
                             text: str,
                             layer: int,
                             position: int = -1,
-                            strategy: str = "single") -> np.ndarray:
+                            strategy: str = "single",
+                            capture_preactivation: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
     Extract activations from a specific layer and position
     
@@ -285,7 +290,8 @@ def extract_layer_activations(model: LanguageModel,
                  - 'mean': Average across all tokens
         
     Returns:
-        Activation vector as numpy array
+        If capture_preactivation is False: activation vector as numpy array
+        If True: tuple (post_activation, pre_activation_sign_code)
     """
     try:
         # Set pad token if not set
@@ -302,6 +308,38 @@ def extract_layer_activations(model: LanguageModel,
             # Get layer activations - architecture agnostic
             model_layers = _get_model_layers(model)
             layer_activations = model_layers[layer].output[0]
+            # Try to obtain pre-activation for common activation modules if requested
+            if capture_preactivation:
+                pre_code = None
+                # Attempt to derive pre-activation sign pattern from residual MLP input and linear output
+                # nnsight exposes Module.input and Module.output; many transformer MLPs use activation in between.
+                try:
+                    # Common patterns: model.layers[L].mlp.act or .mlp.activation
+                    pre_mod = None
+                    for act_attr in ['mlp.act', 'mlp.activation', 'feed_forward.act', 'ff.act', 'ff.activation']:
+                        cur = model_layers[layer]
+                        ok = True
+                        for part in act_attr.split('.'):
+                            if hasattr(cur, part):
+                                cur = getattr(cur, part)
+                            else:
+                                ok = False
+                                break
+                        if ok:
+                            pre_mod = cur
+                            break
+                    if pre_mod is not None and hasattr(pre_mod, 'input'):
+                        # pre_mod.input is a tuple; take first tensor [batch, pos, dim]
+                        pre_act_tensor = pre_mod.input[0][0]  # shape: [seq, dim]
+                        if strategy == "mean":
+                            pre_vec = pre_act_tensor.mean(dim=0).save()
+                        elif strategy == "last" or position == -1:
+                            pre_vec = pre_act_tensor[-1, :].save()
+                        else:
+                            pre_vec = pre_act_tensor[position, :].save()
+                        pre_code = (pre_vec.detach().cpu().numpy() > 0).astype(int)
+                except Exception:
+                    pre_code = None
             
             # Extract activation based on strategy
             if strategy == "mean":
@@ -317,7 +355,10 @@ def extract_layer_activations(model: LanguageModel,
                 activation_vector = layer_activations[0, position, :].save()
         
         # Access the saved activation vector after trace execution
-        return activation_vector.detach().cpu().numpy()
+        act_np = activation_vector.detach().cpu().numpy()
+        if capture_preactivation:
+            return act_np, (pre_code if pre_code is not None else None)
+        return act_np
         
     except Exception as e:
         raise RuntimeError(f"Failed to extract activations from layer {layer}: {str(e)}. " +
@@ -331,7 +372,8 @@ def extract_activations_for_ngram(model_name: str,
                                 target_layers: List[int],
                                 category: str = "unknown",
                                 text_idx: int = 0,
-                                activation_strategy: str = "single") -> List[Dict[str, Any]]:
+                                 activation_strategy: str = "single",
+                                 capture_preactivation: bool = False) -> List[Dict[str, Any]]:
     """
     Extract activations for a specific n-gram across multiple layers
     
@@ -381,7 +423,15 @@ def extract_activations_for_ngram(model_name: str,
         # Extract activations from each target layer
         for layer in target_layers:
             try:
-                activation_vector = extract_layer_activations(model, text, layer, token_position, activation_strategy)
+                if capture_preactivation:
+                    out = extract_layer_activations(model, text, layer, token_position, activation_strategy, capture_preactivation=True)
+                    if isinstance(out, tuple):
+                        activation_vector, pre_code = out
+                    else:
+                        activation_vector, pre_code = out, None
+                else:
+                    activation_vector = extract_layer_activations(model, text, layer, token_position, activation_strategy)
+                    pre_code = None
                 
                 if len(activation_vector) > 0:
                     record = create_activation_record(
@@ -397,7 +447,8 @@ def extract_activations_for_ngram(model_name: str,
                         token_position=token_position,
                         char_start=char_start,
                         char_end=char_end,
-                        activation_vector=activation_vector
+                        activation_vector=activation_vector,
+                        spline_code=pre_code
                     )
                     records.append(record)
                     
@@ -423,7 +474,8 @@ def extract_activations_for_ngram_with_model(model: LanguageModel,
                                            target_layers: List[int],
                                            category: str = "unknown",
                                            text_idx: int = 0,
-                                           activation_strategy: str = "single") -> List[Dict[str, Any]]:
+                                            activation_strategy: str = "single",
+                                            capture_preactivation: bool = False) -> List[Dict[str, Any]]:
     """
     Extract activations for a specific n-gram using an already-loaded model.
     More efficient version that doesn't reload the model for each text.
@@ -460,7 +512,15 @@ def extract_activations_for_ngram_with_model(model: LanguageModel,
         # Extract activations from each target layer
         for layer in target_layers:
             try:
-                activation_vector = extract_layer_activations(model, text, layer, token_position, activation_strategy)
+                if capture_preactivation:
+                    out = extract_layer_activations(model, text, layer, token_position, activation_strategy, capture_preactivation=True)
+                    if isinstance(out, tuple):
+                        activation_vector, pre_code = out
+                    else:
+                        activation_vector, pre_code = out, None
+                else:
+                    activation_vector = extract_layer_activations(model, text, layer, token_position, activation_strategy)
+                    pre_code = None
                 
                 if len(activation_vector) > 0:
                     record = create_activation_record(
@@ -476,7 +536,8 @@ def extract_activations_for_ngram_with_model(model: LanguageModel,
                         token_position=token_position,
                         char_start=char_start,
                         char_end=char_end,
-                        activation_vector=activation_vector
+                        activation_vector=activation_vector,
+                        spline_code=pre_code
                     )
                     records.append(record)
                     
@@ -496,7 +557,8 @@ def extract_activations_from_dataset(model_name: str,
                                    target_layers: List[int] = None,
                                    batch_size: int = 1,
                                    frequency_threshold: float = None,
-                                   activation_strategy: str = "single") -> List[Dict[str, Any]]:
+                                    activation_strategy: str = "single",
+                                    capture_preactivation: bool = False) -> List[Dict[str, Any]]:
     """
     Extract activations from a complete dataset across checkpoints
     Enhanced version with frequency processing for multi-dimensional analysis
@@ -566,7 +628,8 @@ def extract_activations_from_dataset(model_name: str,
                     target_layers=target_layers,
                     category=category,
                     text_idx=text_idx,
-                    activation_strategy=activation_strategy
+                    activation_strategy=activation_strategy,
+                    capture_preactivation=capture_preactivation
                 )
                 
                 checkpoint_records.extend(text_records)
@@ -685,7 +748,8 @@ def run_checkpoint_analysis_pipeline(model_name: str,
             model_name=model_name,
             checkpoints=checkpoints,
             dataset=dataset,
-            target_layers=target_layers
+            target_layers=target_layers,
+            capture_preactivation=True
         )
         
         # Add dataset identifier to records
@@ -757,6 +821,8 @@ def save_activation_records(records: List[Dict[str, Any]],
             json_record = record.copy()
             json_record['activation_vector'] = record['activation_vector'].tolist()
             json_record['binary_pattern'] = record['binary_pattern'].tolist()
+            if 'spline_code' in record and record['spline_code'] is not None:
+                json_record['spline_code'] = np.asarray(record['spline_code']).tolist()
             json_records.append(json_record)
         
         with open(output_path.with_suffix('.json'), 'w') as f:
@@ -783,6 +849,8 @@ def load_activation_records(input_path: str) -> List[Dict[str, Any]]:
         for record in json_records:
             record['activation_vector'] = np.array(record['activation_vector'])
             record['binary_pattern'] = np.array(record['binary_pattern'])
+            if 'spline_code' in record and record['spline_code'] is not None:
+                record['spline_code'] = np.array(record['spline_code']).astype(int)
         
         return json_records
     

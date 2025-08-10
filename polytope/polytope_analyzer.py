@@ -98,14 +98,17 @@ from loguru import logger
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from itertools import combinations
-import pickle
+
 
 # Required imports for advanced polytope analysis
 from hdbscan import HDBSCAN
-from scipy.spatial import ConvexHull
 from scipy.spatial.distance import cdist
 import scipy.sparse as sparse
+try:  # Optional dependency for dimensionality reduction before clustering
+    from umap import UMAP  # type: ignore
+    UMAP_AVAILABLE = True
+except Exception:  # pragma: no cover - environment may not have umap
+    UMAP_AVAILABLE = False
 
 # Optional imports for visualization and timestamps
 try:
@@ -330,21 +333,104 @@ class SuperpositionAnalyzer:
         Returns:
             Dictionary with clustering results
         """
-        # HDBSCAN on binary patterns
-        clusterer_binary = HDBSCAN(
-            min_cluster_size=max(self.min_cluster_size, int(np.sqrt(len(binary_patterns))//2)),
-            metric='hamming',
-            cluster_selection_method='eom'
-        )
-        binary_clusters = clusterer_binary.fit_predict(binary_patterns)
+        # Dimensionality reduction for high-dimensional inputs (UMAP) before clustering
+        bin_for_cluster = binary_patterns
+        act_for_cluster = activations
+        # Use UMAP only when dimensionality is high and sample size supports it; otherwise PCA fallback
+        n_samples_bin = len(binary_patterns)
+        n_samples_act = len(activations)
         
-        # HDBSCAN on activation vectors
-        clusterer_activations = HDBSCAN(
-            min_cluster_size=max(self.min_cluster_size, int(np.sqrt(len(activations))//2)),
+        # For binary patterns: use UMAP only with sufficient samples and dimensions
+        if binary_patterns.shape[1] > 100 and n_samples_bin > 15:
+            if UMAP_AVAILABLE:
+                try:
+                    # More conservative UMAP settings for small sample sizes
+                    n_components = min(20, max(2, min(binary_patterns.shape[1] // 20, n_samples_bin // 2)))
+                    n_neighbors = min(5, max(2, n_samples_bin // 4))
+                    
+                    reducer_bin = UMAP(
+                        n_components=n_components,
+                        n_neighbors=n_neighbors,
+                        metric='hamming',
+                        random_state=self.random_seed,
+                        low_memory=True,
+                        verbose=False
+                    )
+                    bin_for_cluster = reducer_bin.fit_transform(binary_patterns)
+                except Exception as e:
+                    logger.warning(f"UMAP failed for binary patterns: {e}, falling back to PCA")
+                    # PCA fallback for small N or UMAP issues
+                    n_comp = max(2, min(20, n_samples_bin - 1, binary_patterns.shape[1] - 1))
+                    pca_bin = PCA(n_components=n_comp, random_state=self.random_seed)
+                    bin_for_cluster = pca_bin.fit_transform(binary_patterns.astype(float))
+            else:
+                # If UMAP not available, try PCA reduction
+                try:
+                    n_comp = max(2, min(20, n_samples_bin - 1, binary_patterns.shape[1] - 1))
+                    pca_bin = PCA(n_components=n_comp, random_state=self.random_seed)
+                    bin_for_cluster = pca_bin.fit_transform(binary_patterns.astype(float))
+                except Exception:
+                    bin_for_cluster = binary_patterns
+        elif binary_patterns.shape[1] > 50:  # Medium dimensionality: try PCA
+            try:
+                n_comp = max(2, min(20, n_samples_bin - 1, binary_patterns.shape[1] - 1))
+                pca_bin = PCA(n_components=n_comp, random_state=self.random_seed)
+                bin_for_cluster = pca_bin.fit_transform(binary_patterns.astype(float))
+            except Exception:
+                bin_for_cluster = binary_patterns
+
+        # For activation vectors: use UMAP only with sufficient samples and dimensions
+        if activations.shape[1] > 100 and n_samples_act > 15:
+            if UMAP_AVAILABLE:
+                try:
+                    # More conservative UMAP settings for small sample sizes
+                    n_components = min(20, max(2, min(activations.shape[1] // 20, n_samples_act // 2)))
+                    n_neighbors = min(5, max(2, n_samples_act // 4))
+                    
+                    reducer_act = UMAP(
+                        n_components=n_components,
+                        n_neighbors=n_neighbors,
+                        metric='euclidean',
+                        random_state=self.random_seed,
+                        low_memory=True,
+                        verbose=False
+                    )
+                    act_for_cluster = reducer_act.fit_transform(activations)
+                except Exception as e:
+                    logger.warning(f"UMAP failed for activations: {e}, falling back to PCA")
+                    n_comp = max(2, min(20, n_samples_act - 1, activations.shape[1] - 1))
+                    pca_act = PCA(n_components=n_comp, random_state=self.random_seed)
+                    act_for_cluster = pca_act.fit_transform(activations)
+            else:
+                try:
+                    n_comp = max(2, min(20, n_samples_act - 1, activations.shape[1] - 1))
+                    pca_act = PCA(n_components=n_comp, random_state=self.random_seed)
+                    act_for_cluster = pca_act.fit_transform(activations)
+                except Exception:
+                    act_for_cluster = activations
+        elif activations.shape[1] > 50:  # Medium dimensionality: try PCA
+            try:
+                n_comp = max(2, min(20, n_samples_act - 1, activations.shape[1] - 1))
+                pca_act = PCA(n_components=n_comp, random_state=self.random_seed)
+                act_for_cluster = pca_act.fit_transform(activations)
+            except Exception:
+                act_for_cluster = activations
+
+        # HDBSCAN on reduced (or original) spaces
+        clusterer_binary = HDBSCAN(
+            min_cluster_size=max(2, self.min_cluster_size, int(np.sqrt(len(bin_for_cluster))//2)),
             metric='euclidean',
             cluster_selection_method='eom'
         )
-        activation_clusters = clusterer_activations.fit_predict(activations)
+        binary_clusters = clusterer_binary.fit_predict(bin_for_cluster)
+        
+        # HDBSCAN on activation vectors
+        clusterer_activations = HDBSCAN(
+            min_cluster_size=max(2, self.min_cluster_size, int(np.sqrt(len(act_for_cluster))//2)),
+            metric='euclidean',
+            cluster_selection_method='eom'
+        )
+        activation_clusters = clusterer_activations.fit_predict(act_for_cluster)
         
         # Compare cluster consistency
         cluster_consistency = adjusted_rand_score(binary_clusters, activation_clusters)
@@ -399,6 +485,205 @@ class SuperpositionAnalyzer:
             'silhouette_activation': silhouette_activation,
             'noise_fraction_binary': np.mean(binary_clusters == -1),
             'noise_fraction_activation': np.mean(activation_clusters == -1)
+        }
+
+    def compute_spline_codes(self,
+                              binary_patterns: np.ndarray,
+                              require_true_relu_masks: bool = False) -> np.ndarray:
+        """
+        Compute spline codes that identify polytope regions.
+        Current implementation proxies spline codes with CETT-derived binary patterns.
+        If require_true_relu_masks is True and true ReLU masks are not provided, raises an error.
+        """
+        # NOTE: True spline codes require capturing pre-activation sign patterns at non-linearities.
+        # The current dataset contains post-layer activations and CETT binary patterns. We proxy with these.
+        if require_true_relu_masks:
+            raise RuntimeError("True spline codes require ReLU/GELU pre-activation masks during extraction. Re-run checkpoint extraction to capture masks.")
+        return binary_patterns.copy()
+
+    def compute_polytope_face_density(self,
+                                      activations: np.ndarray,
+                                      spline_codes: np.ndarray,
+                                      max_hamming: int = 2) -> Dict[str, Any]:
+        """
+        Compute a proxy for polytope face density by counting nearby hyperplane crossings.
+        For each sample i, sum hamming_distance(code_i, code_j) / euclidean_distance(x_i, x_j)
+        over neighbors j whose hamming distance <= max_hamming.
+
+        Returns per-sample densities and summary statistics.
+        """
+        if len(activations) != len(spline_codes):
+            raise ValueError("activations and spline_codes must have the same number of samples")
+        if len(activations) < 2:
+            raise ValueError("Need at least two samples to compute face densities")
+
+        n = len(activations)
+        densities = np.zeros(n, dtype=float)
+        for i in range(n):
+            # Vectorized distances to all points
+            diffs = activations - activations[i]
+            euc = np.linalg.norm(diffs, axis=1)
+            ham = np.sum(spline_codes != spline_codes[i], axis=1)
+            mask = (ham > 0) & (ham <= max_hamming) & (euc > 1e-12)
+            if np.any(mask):
+                densities[i] = float(np.sum(ham[mask] / euc[mask]))
+            else:
+                densities[i] = 0.0
+
+        return {
+            'face_density_per_sample': densities,
+            'face_density_mean': float(np.mean(densities)),
+            'face_density_std': float(np.std(densities)),
+            'face_density_percentiles': {
+                '25th': float(np.percentile(densities, 25)),
+                '50th': float(np.percentile(densities, 50)),
+                '75th': float(np.percentile(densities, 75)),
+            }
+        }
+
+    def compute_pattern_entropy(self, codes: np.ndarray) -> float:
+        """Shannon entropy of row-wise patterns."""
+        if codes.size == 0:
+            return 0.0
+        # Hash rows to counts
+        hashes = np.array([hash(row.tobytes()) for row in codes.astype(np.uint8)])
+        _, counts = np.unique(hashes, return_counts=True)
+        probs = counts / counts.sum()
+        return float(-np.sum(probs * np.log(probs + 1e-12)))
+
+    def estimate_feature_count(self, spline_codes: np.ndarray) -> int:
+        """Estimate number of effective features from polytope patterns via entropy and uniqueness."""
+        if spline_codes.size == 0:
+            return 0
+        unique = np.unique(spline_codes, axis=0)
+        code_entropy = self.compute_pattern_entropy(spline_codes)
+        est = min(len(unique), int(np.floor(np.exp(code_entropy))))
+        return int(est)
+
+    def compute_polytope_diversity(self, spline_codes: np.ndarray) -> Dict[str, float]:
+        """Diversity metrics over spline codes: unique fraction and entropy."""
+        if spline_codes.size == 0:
+            return {'unique_fraction': 0.0, 'entropy': 0.0}
+        unique = np.unique(spline_codes, axis=0)
+        unique_fraction = float(len(unique)) / float(len(spline_codes))
+        entropy = self.compute_pattern_entropy(spline_codes)
+        return {'unique_fraction': unique_fraction, 'entropy': float(entropy)}
+
+    def compute_interference_strength(self, activations: np.ndarray) -> float:
+        """Compute mean cosine overlap between neuron activity vectors as interference proxy."""
+        if activations.size == 0:
+            return 0.0
+        A = activations.T  # neurons x samples
+        norms = np.linalg.norm(A, axis=1)
+        norms[norms == 0] = 1e-12
+        A_norm = A / norms[:, None]
+        # Sampled mean of upper triangle to avoid O(d^2) full storage for large dims
+        d = A_norm.shape[0]
+        if d < 2:
+            return 0.0
+        # Compute a small random subset if very large
+        rng = np.random.default_rng(self.random_seed)
+        max_pairs = min(20000, d * (d - 1) // 2)
+        if d * (d - 1) // 2 <= max_pairs:
+            # Exact
+            sims = []
+            for i in range(d):
+                vi = A_norm[i]
+                dots = A_norm[i + 1 :] @ vi
+                sims.append(dots)
+            sims_arr = np.concatenate(sims) if sims else np.array([])
+        else:
+            sims_list = []
+            while len(sims_list) < max_pairs:
+                i = int(rng.integers(0, d))
+                j = int(rng.integers(0, d))
+                if i >= j:
+                    continue
+                sims_list.append(float(np.dot(A_norm[i], A_norm[j])))
+            sims_arr = np.array(sims_list)
+        return float(np.mean(np.abs(sims_arr))) if sims_arr.size else 0.0
+
+    def measure_feature_superposition(self,
+                                      activations: np.ndarray,
+                                      spline_codes: np.ndarray,
+                                      n_features_est: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Enhanced superposition summary using polytope diversity and interference proxy.
+        """
+        n_samples, n_dims = activations.shape
+        if n_samples == 0 or n_dims == 0:
+            return {
+                'superposition_ratio': 0.0,
+                'estimated_features': 0,
+                'interference_strength': 0.0,
+                'phase_classification': 'unknown',
+                'polytope_diversity': {'unique_fraction': 0.0, 'entropy': 0.0},
+            }
+
+        if n_features_est is None:
+            n_features_est = self.estimate_feature_count(spline_codes)
+
+        superposition_ratio = float(n_features_est) / float(n_dims)
+        interference_strength = self.compute_interference_strength(activations)
+        phase_boundary = 1.0  # nominal threshold; interpret relative to n_dims and task
+        phase = "strong" if superposition_ratio > phase_boundary else "weak"
+
+        return {
+            'superposition_ratio': float(superposition_ratio),
+            'estimated_features': int(n_features_est),
+            'interference_strength': float(interference_strength),
+            'phase_classification_enhanced': phase,
+            'polytope_diversity': self.compute_polytope_diversity(spline_codes),
+        }
+
+    def compute_polytope_region_metrics(self, spline_codes: np.ndarray) -> Dict[str, Any]:
+        """Compute region-level metrics from codes: count, entropy, concentration (Gini)."""
+        if spline_codes.size == 0:
+            raise ValueError("Empty spline codes")
+        # Hash rows to identify unique regions
+        # Use view trick for speed-safe hashing
+        codes = spline_codes.astype(np.uint8)
+        # Convert to bytes per row
+        hashes = np.array([hash(row.tobytes()) for row in codes])
+        unique, counts = np.unique(hashes, return_counts=True)
+        probs = counts / counts.sum()
+        # Entropy
+        entropy = float(-np.sum(probs * np.log(probs + 1e-12)))
+        # Gini (concentration)
+        gini = float(1.0 - np.sum(probs ** 2))
+        return {
+            'n_regions': int(len(unique)),
+            'region_entropy': entropy,
+            'region_concentration_gini': gini,
+            'largest_region_fraction': float(np.max(probs)),
+        }
+
+    def compute_knn_flip_rate(self, binary_patterns: np.ndarray, activations: np.ndarray,
+                               k: int = 10) -> Dict[str, Any]:
+        """Estimate boundary density via k-NN flip rate: fraction of neighbors with differing codes."""
+        if len(activations) < 2:
+            raise ValueError("Need at least two samples to compute flip rates")
+        k = max(1, min(k, len(activations) - 1))
+        # Compute kNN in activation space
+        dists = cdist(activations, activations, metric='euclidean')
+        np.fill_diagonal(dists, np.inf)
+        nn_idx = np.argpartition(dists, kth=k, axis=1)[:, :k]
+        # For each sample, fraction of neighbors with different binary code
+        flips = []
+        for i in range(len(activations)):
+            neighbors = nn_idx[i]
+            diff = np.any(binary_patterns[neighbors] != binary_patterns[i], axis=1)
+            flips.append(np.mean(diff))
+        flips = np.array(flips, dtype=float)
+        return {
+            'flip_rate_per_sample': flips,
+            'flip_rate_mean': float(np.mean(flips)),
+            'flip_rate_std': float(np.std(flips)),
+            'flip_rate_percentiles': {
+                '25th': float(np.percentile(flips, 25)),
+                '50th': float(np.percentile(flips, 50)),
+                '75th': float(np.percentile(flips, 75))
+            }
         }
     
     def compare_frequency_groups(self, high_freq_results: Dict, low_freq_results: Dict) -> Dict[str, Any]:
@@ -489,8 +774,10 @@ class SuperpositionAnalyzer:
                                        activations_high_freq: np.ndarray,
                                      activations_low_freq: np.ndarray,
                                        semantic_category: str = "n_grams",
-                                       binary_patterns_high: Optional[np.ndarray] = None,
-                                       binary_patterns_low: Optional[np.ndarray] = None) -> Dict[str, Any]:
+                                        binary_patterns_high: Optional[np.ndarray] = None,
+                                        binary_patterns_low: Optional[np.ndarray] = None,
+                                        spline_codes_high: Optional[np.ndarray] = None,
+                                        spline_codes_low: Optional[np.ndarray] = None) -> Dict[str, Any]:
         """
         Complete integrated analysis pipeline comparing high vs low frequency n-grams.
         
@@ -554,11 +841,37 @@ class SuperpositionAnalyzer:
             polytope_metrics = self.compute_polytope_metrics(
                 activations, processed['binary_patterns']
             )
+            # Additional boundary density proxy via local flip rates
+            flip_metrics = self.compute_knn_flip_rate(
+                processed['binary_patterns'], activations, k=min(10, max(2, int(np.sqrt(len(activations))//2)))
+            )
+            # Prefer true spline codes if provided; otherwise proxy via CETT patterns
+            if freq_type == 'high_freq' and spline_codes_high is not None:
+                spline_codes = spline_codes_high
+            elif freq_type == 'low_freq' and spline_codes_low is not None:
+                spline_codes = spline_codes_low
+            else:
+                spline_codes = self.compute_spline_codes(processed['binary_patterns'])
+            region_metrics = self.compute_polytope_region_metrics(spline_codes)
+
+            # Optional geometric face density using spline codes
+            try:
+                face_density = self.compute_polytope_face_density(activations, spline_codes)
+            except Exception as _:
+                face_density = {
+                    'face_density_per_sample': np.zeros(len(activations), dtype=float),
+                    'face_density_mean': np.nan,
+                    'face_density_std': np.nan,
+                    'face_density_percentiles': {'25th': np.nan, '50th': np.nan, '75th': np.nan},
+                }
             
             # Phase 3: Superposition Measurement  
             superposition_metrics = self.measure_superposition(
                 activations, processed['binary_patterns']
             )
+
+            # Enhanced superposition summary leveraging spline codes
+            enhanced_superposition = self.measure_feature_superposition(activations, spline_codes)
             
             # Phase 4: Clustering Analysis
             clustering_results = self.clustering_analysis(
@@ -572,7 +885,11 @@ class SuperpositionAnalyzer:
             results[freq_type] = {
                 **processed,
                 **polytope_metrics, 
+                **{f'knn_{k}': v for k, v in flip_metrics.items()},
+                **{f'region_{k}': v for k, v in region_metrics.items()},
                 **superposition_metrics,
+                **{f'face_{k}': v for k, v in face_density.items()},
+                **{f'enh_{k}': v for k, v in enhanced_superposition.items()},
                 **clustering_results,
                 'density_confidence_interval': density_ci,
                 'semantic_category': semantic_category
@@ -696,6 +1013,21 @@ class MultiCheckpointPolytopeAnalyzer:
         binary_patterns = np.stack([r['binary_pattern'] for r in records])
         
         return activations, binary_patterns
+
+    def extract_spline_codes_from_records(self, records: List[Dict[str, Any]]) -> Optional[np.ndarray]:
+        """Extract spline codes from records if present. Returns None if any are missing."""
+        if not records:
+            return None
+        codes_list = []
+        for r in records:
+            code = r.get('spline_code', None)
+            if code is None:
+                return None
+            codes_list.append(np.asarray(code, dtype=int))
+        try:
+            return np.stack(codes_list)
+        except Exception:
+            return None
     
     def analyze_checkpoint_layer_comparison(self, 
                                           high_freq_records: List[Dict[str, Any]], 
@@ -710,6 +1042,9 @@ class MultiCheckpointPolytopeAnalyzer:
         # Extract activation matrices
         high_activations, high_patterns = self.extract_activation_matrices(high_freq_records)
         low_activations, low_patterns = self.extract_activation_matrices(low_freq_records)
+        # Optional spline codes if available in records
+        high_codes = self.extract_spline_codes_from_records(high_freq_records)
+        low_codes = self.extract_spline_codes_from_records(low_freq_records)
         
         # Run base polytope analysis
         results = self.base_analyzer.analyze_polytope_superposition(
@@ -717,7 +1052,9 @@ class MultiCheckpointPolytopeAnalyzer:
             activations_low_freq=low_activations,
             semantic_category=f"checkpoint_{checkpoint}_layer_{layer}",
             binary_patterns_high=high_patterns,
-            binary_patterns_low=low_patterns
+            binary_patterns_low=low_patterns,
+            spline_codes_high=high_codes,
+            spline_codes_low=low_codes
         )
         
         # Add checkpoint-specific metadata
