@@ -36,7 +36,6 @@ dependencies = [
     "datasets>=2.19.0",
 ]
 
-
 [tool.ruff]
 line-length = 99
 src = ["superposition_timeline"]
