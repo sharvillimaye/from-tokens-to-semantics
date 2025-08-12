@@ -3,7 +3,7 @@
 
 # Mac OS-specific storage files
 .DS_Store
-
+.idea
 # vim
 *.swp
 *.swo
@@ -184,3 +184,6 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+# Ignore generated caches and analysis outputs
+cache/
+
