@@ -47,6 +47,7 @@ except Exception:  # pragma: no cover
 # ---- Toolkit imports (from the ne_tlk module) --------------------------------
 from ne_tlk import (
     TransformerLensEmbeddingCollector,
+    OptimizedTransformerLensEmbeddingCollector,
     cluster_embeddings,
     polysemanticity_metrics,
 )
@@ -277,6 +278,10 @@ def normalized_pythia_id(model_arg: str) -> str:
         return "EleutherAI/pythia-160m-deduped-v0"
     if "pythia-160m" in low:
         return "EleutherAI/pythia-160m-v0"
+    if "pythia-410m" in low and "dedup" in low:
+        return "EleutherAI/pythia-410m-deduped-v0"
+    if "pythia-410m" in low:
+        return "EleutherAI/pythia-410m-v0"
     return model_arg  # non-Pythia models pass through unchanged
 
 # --------------------------- Per-checkpoint runner ----------------------------
@@ -297,10 +302,13 @@ def run_over_checkpoints(args):
     raw_texts = [t for t in raw_texts if t]  # drop empties
     print(f"Loaded {len(raw_texts)} text examples")
 
+    # Optimized batch processing with larger batches
+    optimized_batch_size = min(64, len(raw_texts))  # Use larger batches for efficiency
+    
     def token_batch_iter():
-        for i in range(0, len(raw_texts), args.batch_size):
+        for i in range(0, len(raw_texts), optimized_batch_size):
             toks = base_tokenizer(
-                raw_texts[i:i+args.batch_size],
+                raw_texts[i:i+optimized_batch_size],
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
@@ -341,8 +349,9 @@ def run_over_checkpoints(args):
             model = load_step_model(model_name, step, device)
             print(f"Model loaded successfully")
 
-            print(f"Setting up collector for layer {args.layer}, neuron {args.neuron}")
-            collector = TransformerLensEmbeddingCollector(
+            print(f"Setting up optimized collector for layer {args.layer}, neuron {args.neuron}")
+            # Use the optimized collector
+            collector = OptimizedTransformerLensEmbeddingCollector(
                 model,
                 layer_name=args.layer,
                 neuron_idx=args.neuron,
@@ -351,9 +360,10 @@ def run_over_checkpoints(args):
                 max_examples=args.max_examples,
                 device=device,
                 decode_text=not args.no_text,
+                batch_size=optimized_batch_size,
             )
 
-            print(f"Running collector...")
+            print(f"Running optimized collector...")
             embeds = collector.run(token_batch_iter())  # (N, d_hidden) or None
             n_examples = 0 if embeds is None else int(embeds.shape[0])
             print(f"Collector finished. Embeddings shape: {embeds.shape if embeds is not None else 'None'}")
