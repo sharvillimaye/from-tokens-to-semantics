@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """
-Script to run checkpoint analysis for every twentieth neuron in Layers 0-5 of Pythia-70M
-(or Layers 0-n of another model - you'll have to change lines 47 and 50 to reflect this)
+Script to run checkpoint analysis for every twentieth neuron in Layers 0-23 of Pythia-410M
 """
 
 import subprocess
@@ -10,7 +9,6 @@ import time
 from pathlib import Path
 
 def run_checkpoint_analysis(layer, neuron):
-    p
     print(f"\n{'='*60}")
     print(f"Analyzing L{layer}N{neuron}")
     print(f"{'='*60}")
@@ -18,7 +16,7 @@ def run_checkpoint_analysis(layer, neuron):
     cmd = [
         sys.executable, "checkpoints_demo.py",
         "--series",
-        "--model", "pythia-160m",
+        "--model", "pythia-410m",
         "--layer", f"blocks.{layer}.mlp",
         "--neuron", str(neuron),
         "--ckpt_mode", "skip",
@@ -44,10 +42,10 @@ def run_checkpoint_analysis(layer, neuron):
 def main():
     
     # Define layers to analyze
-    layers = list(range(12)) # Layers 0, 1,..., 11
+    layers = list(range(24)) # Layers 0, 1,..., 23
     
     # Generate list of neurons
-    neurons = list(range(0, 3072, 20)) # 0, 20, 40, ..., 3060 (every 20th)
+    neurons = list(range(0, 4096, 20)) # 0, 20, 40, ..., 4080 (every 20th)
     
     total_analyses = len(layers) * len(neurons)
     

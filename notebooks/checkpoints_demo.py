@@ -47,7 +47,6 @@ except Exception:  # pragma: no cover
 # ---- Toolkit imports (from the ne_tlk module) --------------------------------
 from ne_tlk import (
     TransformerLensEmbeddingCollector,
-    OptimizedTransformerLensEmbeddingCollector,
     cluster_embeddings,
     polysemanticity_metrics,
 )
@@ -302,8 +301,8 @@ def run_over_checkpoints(args):
     raw_texts = [t for t in raw_texts if t]  # drop empties
     print(f"Loaded {len(raw_texts)} text examples")
 
-    # Optimized batch processing with larger batches
-    optimized_batch_size = min(64, len(raw_texts))  # Use larger batches for efficiency
+    # Optimized batch processing with smaller batches for memory efficiency
+    optimized_batch_size = min(8, len(raw_texts))  # Use smaller batches to avoid MPS memory issues
     
     def token_batch_iter():
         for i in range(0, len(raw_texts), optimized_batch_size):
@@ -349,9 +348,9 @@ def run_over_checkpoints(args):
             model = load_step_model(model_name, step, device)
             print(f"Model loaded successfully")
 
-            print(f"Setting up optimized collector for layer {args.layer}, neuron {args.neuron}")
-            # Use the optimized collector
-            collector = OptimizedTransformerLensEmbeddingCollector(
+            print(f"Setting up collector for layer {args.layer}, neuron {args.neuron}")
+            # Use the regular collector
+            collector = TransformerLensEmbeddingCollector(
                 model,
                 layer_name=args.layer,
                 neuron_idx=args.neuron,
@@ -360,10 +359,9 @@ def run_over_checkpoints(args):
                 max_examples=args.max_examples,
                 device=device,
                 decode_text=not args.no_text,
-                batch_size=optimized_batch_size,
             )
 
-            print(f"Running optimized collector...")
+            print(f"Running collector...")
             embeds = collector.run(token_batch_iter())  # (N, d_hidden) or None
             n_examples = 0 if embeds is None else int(embeds.shape[0])
             print(f"Collector finished. Embeddings shape: {embeds.shape if embeds is not None else 'None'}")
@@ -534,7 +532,7 @@ def build_arg_parser():
     parser.add_argument("--threshold", type=float, default=0.6, help="Threshold for inclusion (fraction of peak activation)")
     parser.add_argument("--peak_activation", type=float, default=2.5, help="Peak activation for this neuron (from Neuroscope)")
     parser.add_argument("--distance_threshold", type=float, default=0.8, help="Distance threshold for clustering (cosine distance)")
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--no_text", action="store_true", help="Skip text decoding for maximum speed")
     parser.add_argument("--outfile", type=Path, help="Output file path (single-run metrics JSON)")
 
