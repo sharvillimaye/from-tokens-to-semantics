@@ -6,7 +6,7 @@ to various inputs by calculating a metric Foote (2024) labels as "neuron embeddi
 The main idea is that we can understand what a neuron's reaction to a text excerpt is by calculating 
 the Hadamard product of its input weights and the vector representation it receives (pre-MLP activations).
 
-Based on this metric, we can select the top-k excerpts that a neuron is most sensitve to, and then
+Based on this metric, we can select the top-k excerpts that a neuron is most sensitive to, and then
 cluster these excerpts (using HAC) based on their semantic similarity. This allows us to measure how
 "polysemantic" a neuron is. We can get various metrics, including # of clusters, size of clusters,
 intra- and inter-cluster distances, etc. 
