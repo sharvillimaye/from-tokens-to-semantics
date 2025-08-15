@@ -21,6 +21,8 @@ dependencies = [
     "nnsight>=0.4.11",
     "numpy>=2.3.2",
     "pandas>=2.3.1",
+    "pytest>=8.4.1",
+    "scikit-learn>=1.7.1",
     "scipy>=1.16.1",
     "seaborn>=0.13.2",
     "torch>=2.7.1",
@@ -28,8 +30,11 @@ dependencies = [
     "transformer-lens>=2.15.4",
     "transformers>=4.54.0",
     "tokengrams>=0.3.3",
+    "hdbscan>=0.8.40",
+    "loguru>=0.7.3",
+    "typer>=0.12.3",
+    "datasets>=2.19.0",
 ]
-
 
 [tool.ruff]
 line-length = 99

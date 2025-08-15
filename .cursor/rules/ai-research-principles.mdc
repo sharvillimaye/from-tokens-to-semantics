@@ -1,0 +1,43 @@
+---
+alwaysApply: true
+description: Core principles for AI research codebase development
+---
+
+# AI Research Codebase Principles
+
+This project is focused on AI research, specifically polytope analysis, n-grams, and superposition timelines. Follow these core principles:
+
+## 1. Simplicity First
+- **Keep code minimal and readable**: Write the simplest solution that works
+- **Avoid over-engineering**: Don't add complexity unless absolutely necessary
+- **Single responsibility**: Each function/class should do one thing well
+- **Clear naming**: Use descriptive variable and function names that explain purpose
+- **Minimal dependencies**: Only add new dependencies if they provide significant value
+
+## 2. Task-Focused Development
+- **Stay on task**: Only implement features directly related to the current research objective
+- **No premature optimization**: Focus on correctness first, optimize only when needed
+- **Document research intent**: Every major function should include docstrings explaining its research purpose
+- **Iterative approach**: Build incrementally, test each component before moving forward
+
+## 3. Robust Implementation
+- **Input validation**: Always validate inputs and handle edge cases
+- **Error handling**: Use proper exception handling with meaningful error messages
+- **Type hints**: Use Python type hints for better code clarity and IDE support
+- **Testing**: Write tests for core functionality, especially data processing pipelines
+- **Reproducibility**: Ensure research results can be reproduced with same inputs
+
+## 4. Research-Specific Guidelines
+- **Data integrity**: Validate data at every transformation step
+- **Clear experiments**: Each notebook/script should have a clear experimental purpose
+- **Modular analysis**: Break complex analyses into reusable components
+- **Performance awareness**: Monitor memory usage and computational complexity for large datasets
+- **Version control**: Commit frequently with descriptive messages about research progress
+
+## 5. Code Organization
+- Keep related functionality in focused modules
+- Use consistent file naming conventions
+- Maintain clean separation between data processing, analysis, and visualization
+- Document any mathematical concepts or algorithms being implemented
+
+Remember: This is research code that needs to be **understandable**, **reliable**, and **focused** on advancing the research objectives.
