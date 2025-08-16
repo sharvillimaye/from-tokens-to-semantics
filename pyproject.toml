@@ -36,7 +36,6 @@ dependencies = [
     "datasets>=2.19.0",
     "nltk>=3.9.1",
     "cupy-cuda12x>=13.3.0; platform_system=='Linux'",
-    "cupy>=13.3.0; platform_system=='Darwin'",
 ]
 
 [tool.ruff]
