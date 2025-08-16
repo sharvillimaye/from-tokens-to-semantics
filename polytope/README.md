@@ -112,6 +112,26 @@ results_file = run_checkpoint_analysis_pipeline(
 )
 ```
 
+### Build Semantic N-gram Frequency Dataset (tokengrams)
+
+```bash
+# 1) Build dataset from an existing tokengrams memmap index
+uv run python ngrams/build_semantic_ngram_frequency_dataset.py \
+  --output-path datasets/semantic_frequency/combined_semantic_ngram_dataset.json \
+  --tokenizer-name EleutherAI/gpt-neox-20b \
+  --corpus-bin /path/to/tokens.bin \
+  --index-idx /path/to/tokens.idx \
+  --vocab-size 50277
+
+# 2) Run checkpoint pipeline using all datasets under datasets/semantic_frequency
+uv run python -c "from polytope.checkpoint_analysis import run_checkpoint_analysis_pipeline; \
+print(run_checkpoint_analysis_pipeline('EleutherAI/pythia-70m', ['0','1000','5000'], target_layers=[2,4,6]))"
+```
+
+The new dataset includes sentence-level contexts, per-checkpoint counts, and log-binned
+frequency categories (ultra-low, low, medium, high, ultra-high) and is compatible
+with the checkpoint analysis pipeline.
+
 ### Load and Process Datasets
 
 ```python

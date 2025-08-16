@@ -93,6 +93,7 @@ from sklearn.metrics import adjusted_rand_score
 from typing import List, Dict, Any, Tuple, Optional
 from collections import defaultdict
 from pathlib import Path
+import pickle
 import warnings
 from loguru import logger
 import pandas as pd
@@ -1409,8 +1410,18 @@ def _load_checkpoint_data_simple(checkpoint_file: str) -> Dict[str, Any]:
         for r in records:
             checkpoints.add(r.get('checkpoint_step'))
             layers.add(r.get('layer'))
+        # Attempt to infer model name from record metadata if present
+        inferred_model: str = 'Unknown'
+        if records:
+            r0 = records[0]
+            meta = r0.get('metadata') if isinstance(r0, dict) else None
+            if isinstance(meta, dict):
+                inferred_model = meta.get('model_name', inferred_model)
+            # Also try top-level just in case
+            if inferred_model == 'Unknown':
+                inferred_model = r0.get('model_name', inferred_model)
         metadata = {
-            'model_name': 'Unknown',
+            'model_name': inferred_model,
             'checkpoints': sorted(list(checkpoints)),
             'target_layers': sorted(list(layers)),
             'n_total_records': len(records),
@@ -1533,7 +1544,9 @@ def _generate_visualizations(results: Dict[str, Any], output_dir: str = "cache/p
     ax1.set_xlabel('Checkpoint Step')
     ax1.set_ylabel('Superposition Strength Difference')
     ax1.set_title('Superposition Evolution by Layer')
-    ax1.legend()
+    handles, labels = ax1.get_legend_handles_labels()
+    if handles and any(labels):
+        ax1.legend()
     ax1.grid(True, alpha=0.3)
     for layer in df['layer'].unique():
         layer_data = df[df['layer'] == layer]
@@ -1541,7 +1554,9 @@ def _generate_visualizations(results: Dict[str, Any], output_dir: str = "cache/p
     ax2.set_xlabel('Checkpoint Step')
     ax2.set_ylabel('Density Ratio (High/Low)')
     ax2.set_title('Polytope Density Evolution by Layer')
-    ax2.legend()
+    handles, labels = ax2.get_legend_handles_labels()
+    if handles and any(labels):
+        ax2.legend()
     ax2.grid(True, alpha=0.3)
     try:
         checkpoints_to_show = sorted([c for c in df['checkpoint'].unique() if isinstance(c, (int, float))])[::2]
@@ -1553,7 +1568,9 @@ def _generate_visualizations(results: Dict[str, Any], output_dir: str = "cache/p
     ax3.set_xlabel('Layer')
     ax3.set_ylabel('Superposition Strength Difference')
     ax3.set_title('Layer Progression at Different Checkpoints')
-    ax3.legend()
+    handles, labels = ax3.get_legend_handles_labels()
+    if handles and any(labels):
+        ax3.legend()
     ax3.grid(True, alpha=0.3)
     scatter = ax4.scatter(df['density_ratio'], df['superposition_diff'], c=pd.factorize(df['checkpoint'])[0], cmap='viridis', s=60, alpha=0.7, edgecolors='black', linewidth=0.5)
     ax4.set_xlabel('Density Ratio (High/Low)')

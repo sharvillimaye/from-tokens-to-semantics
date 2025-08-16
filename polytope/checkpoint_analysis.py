@@ -15,6 +15,7 @@ import json
 from tqdm import tqdm
 from collections import defaultdict
 from pathlib import Path
+from typing import Iterable
 
 def compute_cett_threshold(activation_vector: np.ndarray, 
                           target_cett: float = 0.01) -> float:
@@ -230,6 +231,57 @@ def _find_comprehensive_matches(text: str, ngram: str) -> List[Tuple[int, int, f
     return unique_matches[:5]  # Return top 5 matches
 
 
+def _find_sublist_start(haystack: Iterable[int], needle: Iterable[int]) -> Optional[int]:
+    """Return start index of first occurrence of needle as a contiguous sublist in haystack, else None."""
+    hay = list(haystack)
+    ned = list(needle)
+    if not ned or len(ned) > len(hay):
+        return None
+    first = ned[0]
+    max_start = len(hay) - len(ned)
+    for i in range(max_start + 1):
+        if hay[i] != first:
+            continue
+        if hay[i:i + len(ned)] == ned:
+            return i
+    return None
+
+
+def _find_ngram_token_span(tokenizer, text: str, ngram: str) -> Optional[Tuple[int, int, int, int]]:
+    """
+    Token-level fallback matching.
+    Returns (token_start_idx, token_end_exclusive, char_start, char_end) if the n-gram token ids
+    appear contiguously in the tokenized text; otherwise None.
+    """
+    try:
+        text_enc = tokenizer(text, return_offsets_mapping=True, return_tensors="pt")
+        text_ids = text_enc["input_ids"][0].tolist()
+        offsets = text_enc["offset_mapping"][0]
+
+        ngram_ids = tokenizer.encode(ngram, add_special_tokens=False)
+        if not ngram_ids:
+            return None
+
+        start_idx = _find_sublist_start(text_ids, ngram_ids)
+        if start_idx is None:
+            # Try with a leading space variant which is common for GPT-NeoX style tokenizers
+            ngram_ids_space = tokenizer.encode(" " + ngram, add_special_tokens=False)
+            start_idx = _find_sublist_start(text_ids, ngram_ids_space)
+            if start_idx is None:
+                return None
+            span_len = len(ngram_ids_space)
+        else:
+            span_len = len(ngram_ids)
+
+        end_idx_excl = start_idx + span_len
+        # Derive character span from offsets
+        char_start = int(offsets[start_idx][0])
+        char_end = int(offsets[end_idx_excl - 1][1])
+        return start_idx, end_idx_excl, char_start, char_end
+    except Exception:
+        return None
+
+
 def _get_model_layers(model: LanguageModel) -> Any:
     """Get the layers attribute for different model architectures"""
     # Try different model architectures
@@ -408,14 +460,22 @@ def extract_activations_for_ngram(model_name: str,
         if model.tokenizer.pad_token is None:
             model.tokenizer.pad_token = model.tokenizer.eos_token
         
-        # Find n-gram matches in text
+        # Find n-gram matches in text (string-based)
         matches = find_ngram_matches(text, ngram, strategy="comprehensive")
-        
-        if not matches:
-            return records
-        
-        # Use best match
-        char_start, char_end, confidence, matched_text = matches[0]
+        char_start: Optional[int] = None
+        char_end: Optional[int] = None
+        confidence: float = 0.0
+        matched_text: str = ""
+        if matches:
+            char_start, char_end, confidence, matched_text = matches[0]
+        else:
+            # Token-level fallback: attempt to locate n-gram as a contiguous token span
+            tk_span = _find_ngram_token_span(model.tokenizer, text, ngram)
+            if tk_span is None:
+                return records
+            token_start, token_end, char_start, char_end = tk_span
+            confidence = 0.85  # conservative confidence for token-span fallback
+            matched_text = text[char_start:char_end]
         
         # Get precise token position using offset mapping
         token_position = _get_precise_token_position(model.tokenizer, text, char_start)
@@ -448,7 +508,8 @@ def extract_activations_for_ngram(model_name: str,
                         char_start=char_start,
                         char_end=char_end,
                         activation_vector=activation_vector,
-                        spline_code=pre_code
+                        spline_code=pre_code,
+                        model_name=model_name
                     )
                     records.append(record)
                     
@@ -468,6 +529,7 @@ def extract_activations_for_ngram(model_name: str,
 
 
 def extract_activations_for_ngram_with_model(model: LanguageModel,
+                                           model_name: str,
                                            checkpoint: str,
                                            text: str,
                                            ngram: str,
@@ -497,14 +559,22 @@ def extract_activations_for_ngram_with_model(model: LanguageModel,
     records = []
     
     try:
-        # Find n-gram matches in text
+        # Find n-gram matches in text (string-based)
         matches = find_ngram_matches(text, ngram, strategy="comprehensive")
-        
-        if not matches:
-            return records
-        
-        # Use best match
-        char_start, char_end, confidence, matched_text = matches[0]
+        char_start: Optional[int] = None
+        char_end: Optional[int] = None
+        confidence: float = 0.0
+        matched_text: str = ""
+        if matches:
+            char_start, char_end, confidence, matched_text = matches[0]
+        else:
+            # Token-level fallback: attempt to locate n-gram as a contiguous token span
+            tk_span = _find_ngram_token_span(model.tokenizer, text, ngram)
+            if tk_span is None:
+                return records
+            token_start, token_end, char_start, char_end = tk_span
+            confidence = 0.85
+            matched_text = text[char_start:char_end]
         
         # Get precise token position using offset mapping
         token_position = _get_precise_token_position(model.tokenizer, text, char_start)
@@ -537,7 +607,8 @@ def extract_activations_for_ngram_with_model(model: LanguageModel,
                         char_start=char_start,
                         char_end=char_end,
                         activation_vector=activation_vector,
-                        spline_code=pre_code
+                        spline_code=pre_code,
+                        model_name=model_name
                     )
                     records.append(record)
                     
@@ -622,6 +693,7 @@ def extract_activations_from_dataset(model_name: str,
                 # Extract activations for this text/ngram combination using existing model
                 text_records = extract_activations_for_ngram_with_model(
                     model=model,
+                    model_name=model_name,
                     checkpoint=checkpoint,
                     text=text,
                     ngram=ngram,
@@ -685,6 +757,9 @@ def load_semantic_frequency_datasets(dataset_dir: str = "datasets/semantic_frequ
             # Validate dataset structure
             required_keys = ['texts', 'ngrams']
             if all(key in dataset for key in required_keys):
+                # Normalize frequency category key for tokengrams-built datasets
+                if 'frequency_categories' not in dataset and 'frequency_bins' in dataset.get('metadata', {}):
+                    pass
                 datasets[dataset_name] = dataset
                 print(f"Loaded {dataset_name}: {len(dataset['texts'])} samples")
             else:
