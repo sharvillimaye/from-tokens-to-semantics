@@ -169,6 +169,10 @@ class TransformerLensEmbeddingCollector:
         
         # Create embeddings
         embeds = [neuron_embedding(p, self.weight_vector) for p in self._pre_mlp_cache]
+        # Robust version
+        if not embeds:
+            # Return None or empty array per your preferred API
+            return None
         return torch.stack(embeds).cpu().numpy()
 
 # This isn't used in any scripts, but is here for reference as what I first wrote. 
