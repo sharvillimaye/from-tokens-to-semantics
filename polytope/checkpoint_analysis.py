@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Simplified Checkpoint Analysis for Polytope Evolution
-Simple functions for extracting position-based activations from model checkpoints
+Optimized Checkpoint Analysis for Polytope Evolution
+Enhanced functions for extracting position-based activations from model checkpoints
+using pre-computed token positions and tokenized text from dataset.json
 """
 
 import torch
@@ -9,13 +10,12 @@ import numpy as np
 import pandas as pd
 from nnsight import LanguageModel
 from typing import List, Dict, Any, Tuple, Optional, Union
-import re
-from difflib import SequenceMatcher
 import json
 from tqdm import tqdm
 from collections import defaultdict
 from pathlib import Path
-from typing import Iterable
+import pickle
+from datetime import datetime
 
 def compute_cett_threshold(activation_vector: np.ndarray, 
                           target_cett: float = 0.01) -> float:
@@ -64,17 +64,14 @@ def compute_cett_threshold(activation_vector: np.ndarray,
     return best_threshold
 
 def create_activation_record(checkpoint_step: str,
-                           text_idx: int,
-                           text: str,
-                           ngram: str,
-                           matched_text: str,
-                           match_confidence: float,
-                           matching_strategy: str,
-                           category: str,
+                           sample_idx: int,
+                           phrase: str,
+                           sentence: str,
+                           frequency_category: str,
                            layer: int,
-                           token_position: int,
-                           char_start: int,
-                           char_end: int,
+                           activation_target_idx: int,
+                           phrase_start_idx: int,
+                           phrase_end_idx: int,
                            activation_vector: np.ndarray,
                            neuron_idx: Optional[int] = None,
                            spline_code: Optional[np.ndarray] = None,
@@ -90,18 +87,15 @@ def create_activation_record(checkpoint_step: str,
     
     record = {
         'checkpoint_step': checkpoint_step,
-        'text_idx': text_idx,
-        'text': text,
-        'ngram': ngram,
-        'matched_text': matched_text,
-        'match_confidence': match_confidence,
-        'matching_strategy': matching_strategy,
-        'category': category,
+        'sample_idx': sample_idx,
+        'phrase': phrase,
+        'sentence': sentence,
+        'frequency_category': frequency_category,
         'layer': layer,
         'neuron_idx': neuron_idx,
-        'token_position': token_position,
-        'char_start': char_start,
-        'char_end': char_end,
+        'activation_target_idx': activation_target_idx,
+        'phrase_start_idx': phrase_start_idx,
+        'phrase_end_idx': phrase_end_idx,
         'activation_vector': activation_vector,
         'binary_pattern': binary_pattern,
         'sparsity': sparsity,
@@ -113,7 +107,6 @@ def create_activation_record(checkpoint_step: str,
         record['spline_code'] = spline_code
     return record
 
-
 def organize_records_by_key(records: List[Dict[str, Any]], key: str) -> Dict[Any, List[Dict[str, Any]]]:
     """Organize records by a specific key"""
     organized = defaultdict(list)
@@ -121,13 +114,11 @@ def organize_records_by_key(records: List[Dict[str, Any]], key: str) -> Dict[Any
         organized[record[key]].append(record)
     return dict(organized)
 
-
 def get_activation_matrix(records: List[Dict[str, Any]]) -> np.ndarray:
     """Extract activation matrix from records"""
     if not records:
         return np.array([])
     return np.stack([r['activation_vector'] for r in records])
-
 
 def convert_records_to_dataframe(records: List[Dict[str, Any]]) -> pd.DataFrame:
     """Convert records to pandas DataFrame"""
@@ -147,140 +138,54 @@ def convert_records_to_dataframe(records: List[Dict[str, Any]]) -> pd.DataFrame:
     
     return pd.DataFrame(df_data)
 
-
-def find_ngram_matches(text: str, ngram: str, strategy: str = "comprehensive") -> List[Tuple[int, int, float, str]]:
+def validate_dataset_structure(dataset: Dict[str, Any]) -> bool:
     """
-    Find all occurrences of an n-gram in text with confidence scores
+    Validate that dataset has the expected structure for checkpoint analysis
     
     Args:
-        text: Input text to search
-        ngram: N-gram to find
-        strategy: Matching strategy ('exact', 'fuzzy', 'comprehensive')
+        dataset: Dataset dictionary to validate
         
     Returns:
-        List of (start_pos, end_pos, confidence, matched_text) tuples
+        True if valid, raises ValueError if invalid
     """
+    if not isinstance(dataset, dict):
+        raise ValueError("Dataset must be a dictionary")
     
-    if strategy == "exact":
-        return _find_exact_matches(text, ngram)
-    elif strategy == "fuzzy":
-        return _find_fuzzy_matches(text, ngram)
-    elif strategy == "comprehensive":
-        return _find_comprehensive_matches(text, ngram)
-    else:
-        return _find_exact_matches(text, ngram)
-
-
-def _find_exact_matches(text: str, ngram: str) -> List[Tuple[int, int, float, str]]:
-    """Find exact string matches"""
-    matches = []
-    start = 0
-    while True:
-        pos = text.find(ngram, start)
-        if pos == -1:
-            break
-        matches.append((pos, pos + len(ngram), 1.0, ngram))
-        start = pos + 1
-    return matches
-
-
-def _find_fuzzy_matches(text: str, ngram: str, threshold: float = 0.8) -> List[Tuple[int, int, float, str]]:
-    """Find fuzzy matches using sequence similarity"""
-    matches = []
-    ngram_len = len(ngram)
+    if 'data' not in dataset:
+        raise ValueError("Dataset must contain 'data' key")
     
-    for i in range(len(text) - ngram_len + 1):
-        window = text[i:i + ngram_len]
-        similarity = SequenceMatcher(None, ngram.lower(), window.lower()).ratio()
-        
-        if similarity >= threshold:
-            confidence = similarity * 0.8  # Lower confidence for fuzzy matches
-            matches.append((i, i + ngram_len, confidence, window))
+    if not isinstance(dataset['data'], list):
+        raise ValueError("Dataset 'data' must be a list")
     
-    return matches
-
-
-def _find_comprehensive_matches(text: str, ngram: str) -> List[Tuple[int, int, float, str]]:
-    """Find matches using multiple strategies"""
-    all_matches = []
+    if len(dataset['data']) == 0:
+        raise ValueError("Dataset 'data' cannot be empty")
     
-    # Strategy 1: Exact matches
-    exact_matches = _find_exact_matches(text, ngram)
-    all_matches.extend([(start, end, conf, matched) for start, end, conf, matched in exact_matches])
+    # Check first sample for required fields
+    sample = dataset['data'][0]
+    required_fields = [
+        'phrase', 'sentence', 'frequency_category', 
+        'token_ids_sentence', 'activation_target_idx',
+        'phrase_start_idx', 'phrase_end_idx'
+    ]
     
-    # Strategy 2: Case insensitive
-    for match in re.finditer(re.escape(ngram), text, re.IGNORECASE):
-        all_matches.append((match.start(), match.end(), 0.9, match.group()))
+    missing_fields = [field for field in required_fields if field not in sample]
+    if missing_fields:
+        raise ValueError(f"Sample missing required fields: {missing_fields}")
     
-    # Strategy 3: Word boundaries
-    escaped_ngram = re.escape(ngram)
-    for pattern, confidence in [(rf'\b{escaped_ngram}\b', 0.95), (rf'\b{escaped_ngram}', 0.7)]:
-        for match in re.finditer(pattern, text, re.IGNORECASE):
-            all_matches.append((match.start(), match.end(), confidence, match.group()))
+    # Validate data types
+    if not isinstance(sample['token_ids_sentence'], list):
+        raise ValueError("token_ids_sentence must be a list")
     
-    # Remove duplicates and sort by confidence
-    unique_matches = []
-    seen_positions = set()
+    if not isinstance(sample['activation_target_idx'], int):
+        raise ValueError("activation_target_idx must be an integer")
     
-    for start, end, conf, matched in sorted(all_matches, key=lambda x: x[2], reverse=True):
-        pos_key = (start, end)
-        if pos_key not in seen_positions:
-            unique_matches.append((start, end, conf, matched))
-            seen_positions.add(pos_key)
+    if not isinstance(sample['phrase_start_idx'], int):
+        raise ValueError("phrase_start_idx must be an integer")
     
-    return unique_matches[:5]  # Return top 5 matches
-
-
-def _find_sublist_start(haystack: Iterable[int], needle: Iterable[int]) -> Optional[int]:
-    """Return start index of first occurrence of needle as a contiguous sublist in haystack, else None."""
-    hay = list(haystack)
-    ned = list(needle)
-    if not ned or len(ned) > len(hay):
-        return None
-    first = ned[0]
-    max_start = len(hay) - len(ned)
-    for i in range(max_start + 1):
-        if hay[i] != first:
-            continue
-        if hay[i:i + len(ned)] == ned:
-            return i
-    return None
-
-
-def _find_ngram_token_span(tokenizer, text: str, ngram: str) -> Optional[Tuple[int, int, int, int]]:
-    """
-    Token-level fallback matching.
-    Returns (token_start_idx, token_end_exclusive, char_start, char_end) if the n-gram token ids
-    appear contiguously in the tokenized text; otherwise None.
-    """
-    try:
-        text_enc = tokenizer(text, return_offsets_mapping=True, return_tensors="pt")
-        text_ids = text_enc["input_ids"][0].tolist()
-        offsets = text_enc["offset_mapping"][0]
-
-        ngram_ids = tokenizer.encode(ngram, add_special_tokens=False)
-        if not ngram_ids:
-            return None
-
-        start_idx = _find_sublist_start(text_ids, ngram_ids)
-        if start_idx is None:
-            # Try with a leading space variant which is common for GPT-NeoX style tokenizers
-            ngram_ids_space = tokenizer.encode(" " + ngram, add_special_tokens=False)
-            start_idx = _find_sublist_start(text_ids, ngram_ids_space)
-            if start_idx is None:
-                return None
-            span_len = len(ngram_ids_space)
-        else:
-            span_len = len(ngram_ids)
-
-        end_idx_excl = start_idx + span_len
-        # Derive character span from offsets
-        char_start = int(offsets[start_idx][0])
-        char_end = int(offsets[end_idx_excl - 1][1])
-        return start_idx, end_idx_excl, char_start, char_end
-    except Exception:
-        return None
-
+    if not isinstance(sample['phrase_end_idx'], int):
+        raise ValueError("phrase_end_idx must be an integer")
+    
+    return True
 
 def _get_model_layers(model: LanguageModel) -> Any:
     """Get the layers attribute for different model architectures"""
@@ -297,49 +202,25 @@ def _get_model_layers(model: LanguageModel) -> Any:
     raise RuntimeError(f"Could not find layers in model architecture. "
                       f"Model type: {type(model).__name__}")
 
-
-def _get_precise_token_position(tokenizer, text: str, char_position: int) -> int:
-    """Get precise token position for character position using offset mapping"""
-    try:
-        # Tokenize with offset mapping
-        encoding = tokenizer(text, return_offsets_mapping=True, return_tensors="pt")
-        offset_mapping = encoding['offset_mapping'][0]  # Remove batch dimension
-        
-        # Find token that contains the character position
-        for token_idx, (start_char, end_char) in enumerate(offset_mapping):
-            if start_char <= char_position < end_char:
-                return token_idx
-            elif start_char > char_position:
-                # Character position is before this token, return previous
-                return max(0, token_idx - 1)
-        
-        # If we didn't find it, return last token position
-        return len(offset_mapping) - 1
-        
-    except Exception:
-        # Fallback to approximate method if offset mapping fails
-        tokens = tokenizer(text[:char_position], return_tensors="pt")
-        return max(0, tokens['input_ids'].shape[1] - 1)
-
-
 def extract_layer_activations(model: LanguageModel,
-                            text: str,
+                            token_ids: List[int],
                             layer: int,
                             position: int = -1,
                             strategy: str = "single",
                             capture_preactivation: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
-    Extract activations from a specific layer and position
+    Extract activations from a specific layer and position using pre-tokenized input
     
     Args:
         model: nnsight LanguageModel
-        text: Input text
+        token_ids: Pre-tokenized input token IDs
         layer: Layer index
         position: Token position (-1 for last token)
         strategy: Extraction strategy ('single', 'last', 'mean')
                  - 'single': Use specific position
                  - 'last': Always use last token
                  - 'mean': Average across all tokens
+        capture_preactivation: Whether to capture pre-activation sign patterns
         
     Returns:
         If capture_preactivation is False: activation vector as numpy array
@@ -350,8 +231,8 @@ def extract_layer_activations(model: LanguageModel,
         if model.tokenizer.pad_token is None:
             model.tokenizer.pad_token = model.tokenizer.eos_token
             
-        # Tokenize input first
-        inputs = model.tokenizer(text, return_tensors="pt")
+        # Convert token IDs to tensor
+        inputs = {"input_ids": torch.tensor([token_ids], device=model.device)}
         
         with model.trace(inputs):
             # Forward pass
@@ -360,11 +241,10 @@ def extract_layer_activations(model: LanguageModel,
             # Get layer activations - architecture agnostic
             model_layers = _get_model_layers(model)
             layer_activations = model_layers[layer].output[0]
+            
             # Try to obtain pre-activation for common activation modules if requested
+            pre_code = None
             if capture_preactivation:
-                pre_code = None
-                # Attempt to derive pre-activation sign pattern from residual MLP input and linear output
-                # nnsight exposes Module.input and Module.output; many transformer MLPs use activation in between.
                 try:
                     # Common patterns: model.layers[L].mlp.act or .mlp.activation
                     pre_mod = None
@@ -416,141 +296,26 @@ def extract_layer_activations(model: LanguageModel,
         raise RuntimeError(f"Failed to extract activations from layer {layer}: {str(e)}. " +
                          "Cannot proceed without valid activation data.")
 
-
-def extract_activations_for_ngram(model_name: str,
-                                checkpoint: str,
-                                text: str,
-                                ngram: str,
-                                target_layers: List[int],
-                                category: str = "unknown",
-                                text_idx: int = 0,
+def extract_activations_for_sample(model: LanguageModel,
+                                 model_name: str,
+                                 checkpoint: str,
+                                 sample: Dict[str, Any],
+                                 target_layers: List[int],
+                                 sample_idx: int = 0,
                                  activation_strategy: str = "single",
                                  capture_preactivation: bool = False) -> List[Dict[str, Any]]:
     """
-    Extract activations for a specific n-gram across multiple layers
-    
-    Args:
-        model_name: Model identifier
-        checkpoint: Checkpoint step
-        text: Input text containing the n-gram
-        ngram: Target n-gram
-        target_layers: List of layer indices
-        category: Frequency category
-        text_idx: Text index for tracking
-        
-    Returns:
-        List of activation records
-    """
-    
-    records = []
-    
-    try:
-        # Load model at checkpoint with auto device mapping
-        model = LanguageModel(model_name, revision=f"step{checkpoint}", device_map='auto')
-        
-        # Debug: verify model checkpoint loading (simplified)
-        try:
-            # Simple verification that model loaded correctly
-            model_info = f"Model {model_name} checkpoint {checkpoint} loaded"
-            print(f"Debug: {model_info}")
-        except Exception as e:
-            print(f"Debug: Model verification failed for checkpoint {checkpoint}: {e}")
-        
-        # Set pad token to avoid warnings
-        if model.tokenizer.pad_token is None:
-            model.tokenizer.pad_token = model.tokenizer.eos_token
-        
-        # Find n-gram matches in text (string-based)
-        matches = find_ngram_matches(text, ngram, strategy="comprehensive")
-        char_start: Optional[int] = None
-        char_end: Optional[int] = None
-        confidence: float = 0.0
-        matched_text: str = ""
-        if matches:
-            char_start, char_end, confidence, matched_text = matches[0]
-        else:
-            # Token-level fallback: attempt to locate n-gram as a contiguous token span
-            tk_span = _find_ngram_token_span(model.tokenizer, text, ngram)
-            if tk_span is None:
-                return records
-            token_start, token_end, char_start, char_end = tk_span
-            confidence = 0.85  # conservative confidence for token-span fallback
-            matched_text = text[char_start:char_end]
-        
-        # Get precise token position using offset mapping
-        token_position = _get_precise_token_position(model.tokenizer, text, char_start)
-        
-        # Extract activations from each target layer
-        for layer in target_layers:
-            try:
-                if capture_preactivation:
-                    out = extract_layer_activations(model, text, layer, token_position, activation_strategy, capture_preactivation=True)
-                    if isinstance(out, tuple):
-                        activation_vector, pre_code = out
-                    else:
-                        activation_vector, pre_code = out, None
-                else:
-                    activation_vector = extract_layer_activations(model, text, layer, token_position, activation_strategy)
-                    pre_code = None
-                
-                if len(activation_vector) > 0:
-                    record = create_activation_record(
-                        checkpoint_step=checkpoint,
-                        text_idx=text_idx,
-                        text=text,
-                        ngram=ngram,
-                        matched_text=matched_text,
-                        match_confidence=confidence,
-                        matching_strategy="comprehensive",
-                        category=category,
-                        layer=layer,
-                        token_position=token_position,
-                        char_start=char_start,
-                        char_end=char_end,
-                        activation_vector=activation_vector,
-                        spline_code=pre_code,
-                        model_name=model_name
-                    )
-                    records.append(record)
-                    
-            except Exception as e:
-                raise RuntimeError(f"Failed to extract activations from layer {layer}: {str(e)}. " +
-                                 "Cannot proceed without complete activation data.")
-        
-        # Clean up model
-        del model
-        torch.cuda.empty_cache()
-        
-    except Exception as e:
-        raise RuntimeError(f"Failed to load model {model_name} at checkpoint {checkpoint}: {str(e)}. " +
-                         "Cannot proceed without valid model.")
-    
-    return records
-
-
-def extract_activations_for_ngram_with_model(model: LanguageModel,
-                                           model_name: str,
-                                           checkpoint: str,
-                                           text: str,
-                                           ngram: str,
-                                           target_layers: List[int],
-                                           category: str = "unknown",
-                                           text_idx: int = 0,
-                                            activation_strategy: str = "single",
-                                            capture_preactivation: bool = False) -> List[Dict[str, Any]]:
-    """
-    Extract activations for a specific n-gram using an already-loaded model.
-    More efficient version that doesn't reload the model for each text.
+    Extract activations for a specific sample using pre-computed token positions
     
     Args:
         model: Already loaded LanguageModel
+        model_name: Model identifier
         checkpoint: Checkpoint step (for record keeping)
-        text: Input text containing the n-gram
-        ngram: Target n-gram
+        sample: Sample from dataset with pre-computed token positions
         target_layers: List of layer indices
-        category: Frequency category
-        text_idx: Text index for tracking
+        sample_idx: Sample index for tracking
         activation_strategy: Strategy for activation extraction
+        capture_preactivation: Whether to capture pre-activation patterns
         
     Returns:
         List of activation records
@@ -559,53 +324,46 @@ def extract_activations_for_ngram_with_model(model: LanguageModel,
     records = []
     
     try:
-        # Find n-gram matches in text (string-based)
-        matches = find_ngram_matches(text, ngram, strategy="comprehensive")
-        char_start: Optional[int] = None
-        char_end: Optional[int] = None
-        confidence: float = 0.0
-        matched_text: str = ""
-        if matches:
-            char_start, char_end, confidence, matched_text = matches[0]
-        else:
-            # Token-level fallback: attempt to locate n-gram as a contiguous token span
-            tk_span = _find_ngram_token_span(model.tokenizer, text, ngram)
-            if tk_span is None:
-                return records
-            token_start, token_end, char_start, char_end = tk_span
-            confidence = 0.85
-            matched_text = text[char_start:char_end]
-        
-        # Get precise token position using offset mapping
-        token_position = _get_precise_token_position(model.tokenizer, text, char_start)
+        # Extract pre-computed information from sample
+        phrase = sample['phrase']
+        sentence = sample['sentence']
+        frequency_category = sample['frequency_category']
+        token_ids_sentence = sample['token_ids_sentence']
+        activation_target_idx = sample['activation_target_idx']
+        phrase_start_idx = sample['phrase_start_idx']
+        phrase_end_idx = sample['phrase_end_idx']
         
         # Extract activations from each target layer
         for layer in target_layers:
             try:
                 if capture_preactivation:
-                    out = extract_layer_activations(model, text, layer, token_position, activation_strategy, capture_preactivation=True)
+                    out = extract_layer_activations(
+                        model, token_ids_sentence, layer, 
+                        activation_target_idx, activation_strategy, 
+                        capture_preactivation=True
+                    )
                     if isinstance(out, tuple):
                         activation_vector, pre_code = out
                     else:
                         activation_vector, pre_code = out, None
                 else:
-                    activation_vector = extract_layer_activations(model, text, layer, token_position, activation_strategy)
+                    activation_vector = extract_layer_activations(
+                        model, token_ids_sentence, layer, 
+                        activation_target_idx, activation_strategy
+                    )
                     pre_code = None
                 
                 if len(activation_vector) > 0:
                     record = create_activation_record(
                         checkpoint_step=checkpoint,
-                        text_idx=text_idx,
-                        text=text,
-                        ngram=ngram,
-                        matched_text=matched_text,
-                        match_confidence=confidence,
-                        matching_strategy="comprehensive",
-                        category=category,
+                        sample_idx=sample_idx,
+                        phrase=phrase,
+                        sentence=sentence,
+                        frequency_category=frequency_category,
                         layer=layer,
-                        token_position=token_position,
-                        char_start=char_start,
-                        char_end=char_end,
+                        activation_target_idx=activation_target_idx,
+                        phrase_start_idx=phrase_start_idx,
+                        phrase_end_idx=phrase_end_idx,
                         activation_vector=activation_vector,
                         spline_code=pre_code,
                         model_name=model_name
@@ -613,56 +371,56 @@ def extract_activations_for_ngram_with_model(model: LanguageModel,
                     records.append(record)
                     
             except Exception as e:
-                print(f"Warning: Failed to extract activations from layer {layer} for text {text_idx}: {e}")
+                print(f"Warning: Failed to extract activations from layer {layer} for sample {sample_idx}: {e}")
                 continue
         
     except Exception as e:
-        print(f"Warning: Failed to process text {text_idx}: {e}")
+        print(f"Warning: Failed to process sample {sample_idx}: {e}")
     
     return records
 
-
 def extract_activations_from_dataset(model_name: str,
                                    checkpoints: List[str],
-                                   dataset: Dict[str, List[Any]],
+                                   dataset: Dict[str, Any],
                                    target_layers: List[int] = None,
-                                   batch_size: int = 1,
-                                   frequency_threshold: float = None,
-                                    activation_strategy: str = "single",
-                                    capture_preactivation: bool = False) -> List[Dict[str, Any]]:
+                                   activation_strategy: str = "single",
+                                   capture_preactivation: bool = False) -> List[Dict[str, Any]]:
     """
     Extract activations from a complete dataset across checkpoints
-    Enhanced version with frequency processing for multi-dimensional analysis
+    Optimized version using pre-computed token positions from dataset.json
     
     Args:
         model_name: Model identifier
         checkpoints: List of checkpoint steps
-        dataset: Dataset with 'texts', 'ngrams', 'categories' keys
+        dataset: Dataset with 'data' key containing samples with pre-computed token positions
         target_layers: Layer indices to analyze
-        batch_size: Batch size for processing
-        frequency_threshold: Optional frequency threshold for filtering
+        activation_strategy: Strategy for activation extraction
+        capture_preactivation: Whether to capture pre-activation patterns
         
     Returns:
-        List of all activation records with frequency information
+        List of all activation records
     """
     
     if target_layers is None:
-        target_layers = [0, 2, 4]  # Default layers
+        target_layers = [0, 2, 4, 6, 8, 10, 12]  # Default layers
     
+    # Validate dataset structure
+    validate_dataset_structure(dataset)
+    samples = dataset['data']
     all_records = []
-    total_texts = len(dataset['texts'])
+    total_samples = len(samples)
     
     print(f"Extracting activations for {len(checkpoints)} checkpoints")
-    print(f"Dataset size: {total_texts} samples")
+    print(f"Dataset size: {total_samples} samples")
     print(f"Target layers: {target_layers}")
     
-    # Check if dataset has frequency categories
-    has_categories = 'frequency_categories' in dataset and len(dataset['frequency_categories']) == total_texts
-    if has_categories:
-        category_counts = {cat: dataset['frequency_categories'].count(cat) for cat in set(dataset['frequency_categories'])}
-        print(f"Found frequency categories: {category_counts}")
-    else:
-        print("No frequency categories found, using 'unknown'")
+    # Check frequency categories
+    if samples and 'frequency_category' in samples[0]:
+        category_counts = {}
+        for sample in samples:
+            cat = sample['frequency_category']
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+        print(f"Frequency categories: {category_counts}")
     
     for checkpoint_idx, checkpoint in enumerate(checkpoints):
         print(f"\nProcessing checkpoint {checkpoint_idx+1}/{len(checkpoints)}: step{checkpoint}")
@@ -680,31 +438,23 @@ def extract_activations_from_dataset(model_name: str,
             
             print(f"Model loaded successfully for checkpoint {checkpoint}")
             
-            # Process all texts with this model
-            for text_idx in tqdm(range(total_texts), desc=f"Checkpoint {checkpoint}"):
-                text = dataset['texts'][text_idx]
-                ngram = dataset['ngrams'][text_idx]
-                # FIXED: Proper category assignment
-                if 'frequency_categories' in dataset and len(dataset['frequency_categories']) > text_idx:
-                    category = dataset['frequency_categories'][text_idx]
-                else:
-                    category = "unknown"
+            # Process all samples with this model
+            for sample_idx in tqdm(range(total_samples), desc=f"Checkpoint {checkpoint}"):
+                sample = samples[sample_idx]
                 
-                # Extract activations for this text/ngram combination using existing model
-                text_records = extract_activations_for_ngram_with_model(
+                # Extract activations for this sample using pre-computed token positions
+                sample_records = extract_activations_for_sample(
                     model=model,
                     model_name=model_name,
                     checkpoint=checkpoint,
-                    text=text,
-                    ngram=ngram,
+                    sample=sample,
                     target_layers=target_layers,
-                    category=category,
-                    text_idx=text_idx,
+                    sample_idx=sample_idx,
                     activation_strategy=activation_strategy,
                     capture_preactivation=capture_preactivation
                 )
                 
-                checkpoint_records.extend(text_records)
+                checkpoint_records.extend(sample_records)
             
             # Clean up model
             del model
@@ -721,149 +471,11 @@ def extract_activations_from_dataset(model_name: str,
     
     # Print category distribution in results
     if all_records:
-        categories = [r['category'] for r in all_records]
+        categories = [r['frequency_category'] for r in all_records]
         category_counts = {cat: categories.count(cat) for cat in set(categories)}
         print(f"Final category distribution: {category_counts}")
     
     return all_records
-
-
-def load_semantic_frequency_datasets(dataset_dir: str = "datasets/semantic_frequency") -> Dict[str, Dict[str, List]]:
-    """
-    Load all semantic frequency datasets for multi-dimensional analysis
-    
-    Args:
-        dataset_dir: Directory containing semantic frequency datasets
-        
-    Returns:
-        Dictionary mapping dataset_name -> dataset_dict
-    """
-    import json
-    from pathlib import Path
-    
-    dataset_path = Path(dataset_dir)
-    if not dataset_path.exists():
-        raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
-    
-    datasets = {}
-    
-    for json_file in dataset_path.glob("*.json"):
-        dataset_name = json_file.stem
-        
-        try:
-            with open(json_file, 'r') as f:
-                dataset = json.load(f)
-            
-            # Validate dataset structure
-            required_keys = ['texts', 'ngrams']
-            if all(key in dataset for key in required_keys):
-                # Normalize frequency category key for tokengrams-built datasets
-                if 'frequency_categories' not in dataset and 'frequency_bins' in dataset.get('metadata', {}):
-                    pass
-                datasets[dataset_name] = dataset
-                print(f"Loaded {dataset_name}: {len(dataset['texts'])} samples")
-            else:
-                print(f"Skipping {dataset_name}: missing required keys {required_keys}")
-                
-        except Exception as e:
-            print(f"Error loading {json_file}: {e}")
-    
-    print(f"Loaded {len(datasets)} datasets from {dataset_dir}")
-    return datasets
-
-
-def run_checkpoint_analysis_pipeline(model_name: str,
-                                    checkpoints: List[str],
-                                    dataset_names: List[str] = None,
-                                    target_layers: List[int] = None,
-                                    output_dir: str = "cache/checkpoint_analysis") -> str:
-    """
-    Complete pipeline for extracting and analyzing checkpoints across datasets
-    
-    Args:
-        model_name: Model identifier for nnsight
-        checkpoints: List of checkpoint steps to analyze
-        dataset_names: Specific datasets to use (None for all)
-        target_layers: Layers to analyze
-        output_dir: Output directory for results
-        
-    Returns:
-        Path to saved analysis results
-    """
-    from pathlib import Path
-    import pickle
-    from datetime import datetime
-    
-    # Load datasets
-    datasets = load_semantic_frequency_datasets()
-    
-    if dataset_names:
-        datasets = {name: datasets[name] for name in dataset_names if name in datasets}
-    
-    if not datasets:
-        raise ValueError("No valid datasets found")
-    
-    # Default target layers (typical transformer layers)
-    if target_layers is None:
-        target_layers = [2, 4, 6, 8, 10, 12]
-    
-    print(f"=== Checkpoint Analysis Pipeline ===")
-    print(f"Model: {model_name}")
-    print(f"Checkpoints: {checkpoints}")
-    print(f"Datasets: {list(datasets.keys())}")
-    print(f"Target layers: {target_layers}")
-    
-    all_records = []
-    
-    # Process each dataset
-    for dataset_name, dataset in datasets.items():
-        print(f"\n=== Processing Dataset: {dataset_name} ===")
-        
-        dataset_records = extract_activations_from_dataset(
-            model_name=model_name,
-            checkpoints=checkpoints,
-            dataset=dataset,
-            target_layers=target_layers,
-            capture_preactivation=True
-        )
-        
-        # Add dataset identifier to records
-        for record in dataset_records:
-            record['dataset_name'] = dataset_name
-        
-        all_records.extend(dataset_records)
-    
-    # Save results
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = output_path / f"checkpoint_analysis_{timestamp}.pkl"
-    
-    analysis_metadata = {
-        'model_name': model_name,
-        'checkpoints': checkpoints,
-        'datasets': list(datasets.keys()),
-        'target_layers': target_layers,
-        'n_total_records': len(all_records),
-        'timestamp': timestamp
-    }
-    
-    # Save with metadata
-    save_data = {
-        'records': all_records,
-        'metadata': analysis_metadata
-    }
-    
-    with open(results_file, 'wb') as f:
-        pickle.dump(save_data, f)
-    
-    print(f"\n=== Analysis Complete ===")
-    print(f"Total records extracted: {len(all_records):,}")
-    print(f"Results saved to: {results_file}")
-    
-    return str(results_file)
-
 
 def save_activation_records(records: List[Dict[str, Any]], 
                           output_path: str,
@@ -881,7 +493,6 @@ def save_activation_records(records: List[Dict[str, Any]],
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     if format == "pickle":
-        import pickle
         with open(output_path.with_suffix('.pkl'), 'wb') as f:
             pickle.dump(records, f)
             
@@ -905,14 +516,12 @@ def save_activation_records(records: List[Dict[str, Any]],
     
     print(f"Saved {len(records)} records to {output_path}")
 
-
 def load_activation_records(input_path: str) -> List[Dict[str, Any]]:
     """Load activation records from file"""
     
     input_path = Path(input_path)
     
     if input_path.suffix == '.pkl':
-        import pickle
         with open(input_path, 'rb') as f:
             return pickle.load(f)
             
@@ -931,7 +540,6 @@ def load_activation_records(input_path: str) -> List[Dict[str, Any]]:
     
     else:
         raise ValueError(f"Unsupported file format: {input_path.suffix}")
-
 
 def analyze_activation_patterns(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -953,7 +561,7 @@ def analyze_activation_patterns(records: List[Dict[str, Any]]) -> Dict[str, Any]
     analysis = {
         'total_records': len(records),
         'unique_checkpoints': df['checkpoint_step'].nunique(),
-        'unique_ngrams': df['ngram'].nunique(),
+        'unique_phrases': df['phrase'].nunique(),
         'unique_layers': df['layer'].nunique(),
         'mean_sparsity': df['sparsity'].mean(),
         'std_sparsity': df['sparsity'].std(),
@@ -977,10 +585,10 @@ def analyze_activation_patterns(records: List[Dict[str, Any]]) -> Dict[str, Any]
     analysis['layer_analysis'] = layer_analysis
     
     # Category analysis
-    if 'category' in df.columns:
+    if 'frequency_category' in df.columns:
         category_analysis = {}
-        for category in df['category'].unique():
-            cat_df = df[df['category'] == category]
+        for category in df['frequency_category'].unique():
+            cat_df = df[df['frequency_category'] == category]
             category_analysis[category] = {
                 'n_records': len(cat_df),
                 'mean_sparsity': cat_df['sparsity'].mean(),
@@ -990,28 +598,126 @@ def analyze_activation_patterns(records: List[Dict[str, Any]]) -> Dict[str, Any]
     
     return analysis
 
+def run_checkpoint_analysis_pipeline(model_name: str,
+                                    checkpoints: List[str],
+                                    dataset_path: str = "polytope/dataset.json",
+                                    target_layers: List[int] = None,
+                                    output_dir: str = "cache/checkpoint_analysis",
+                                    activation_strategy: str = "single",
+                                    capture_preactivation: bool = False) -> str:
+    """
+    Complete pipeline for extracting and analyzing checkpoints using dataset.json
+    
+    Args:
+        model_name: Model identifier for nnsight
+        checkpoints: List of checkpoint steps to analyze
+        dataset_path: Path to dataset.json file
+        target_layers: Layers to analyze
+        output_dir: Output directory for results
+        activation_strategy: Strategy for activation extraction
+        capture_preactivation: Whether to capture pre-activation patterns
+        
+    Returns:
+        Path to saved analysis results
+    """
+    
+    # Load dataset
+    with open(dataset_path, 'r') as f:
+        dataset = json.load(f)
+    
+    # Default target layers (typical transformer layers)
+    if target_layers is None:
+        target_layers = [2, 4, 6, 8, 10, 12]
+    
+    print(f"=== Checkpoint Analysis Pipeline ===")
+    print(f"Model: {model_name}")
+    print(f"Checkpoints: {checkpoints}")
+    print(f"Dataset: {dataset_path}")
+    print(f"Total samples: {dataset.get('total_samples', len(dataset.get('data', [])))}")
+    print(f"Categories: {dataset.get('categories', {})}")
+    print(f"Target layers: {target_layers}")
+    
+    # Extract activations
+    all_records = extract_activations_from_dataset(
+        model_name=model_name,
+        checkpoints=checkpoints,
+        dataset=dataset,
+        target_layers=target_layers,
+        activation_strategy=activation_strategy,
+        capture_preactivation=capture_preactivation
+    )
+    
+    # Save results
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_file = output_path / f"checkpoint_analysis_{timestamp}.pkl"
+    
+    analysis_metadata = {
+        'model_name': model_name,
+        'checkpoints': checkpoints,
+        'dataset_path': dataset_path,
+        'target_layers': target_layers,
+        'n_total_records': len(all_records),
+        'timestamp': timestamp,
+        'activation_strategy': activation_strategy,
+        'capture_preactivation': capture_preactivation
+    }
+    
+    # Save with metadata
+    save_data = {
+        'records': all_records,
+        'metadata': analysis_metadata
+    }
+    
+    with open(results_file, 'wb') as f:
+        pickle.dump(save_data, f)
+    
+    print(f"\n=== Analysis Complete ===")
+    print(f"Total records extracted: {len(all_records):,}")
+    print(f"Results saved to: {results_file}")
+    
+    return str(results_file)
+
 def main():
     """Example usage of optimized checkpoint analysis"""
     model_name = "EleutherAI/pythia-70m"
-    checkpoints=['0', '1', '512', '1000', '10000', '50000', '143000']
-    import json
-    dataset = json.load(open('/content/country_capital_ngram_dataset.json'))
+    # all checkpoints 1000 to 143000
+    checkpoints = [str(2**i) for i in range(0, 10)] # 1 to 512
+    checkpoints.extend([str(i) for i in range(1000, 143000, 1000)])
+    print(checkpoints)
+    dataset_path = "polytope/dataset.json"
+    
+    # Load dataset
+    with open(dataset_path, 'r') as f:
+        dataset = json.load(f)
+    
+    print("Dataset structure:")
+    print(f"Total samples: {dataset.get('total_samples', len(dataset.get('data', [])))}")
+    print(f"Categories: {dataset.get('categories', {})}")
+    print(f"Template: {dataset.get('template', 'N/A')}")
+    
+    # Show sample data structure
+    if dataset.get('data'):
+        sample = dataset['data'][0]
+        print(f"\nSample data keys: {list(sample.keys())}")
+        print(f"Sample phrase: {sample['phrase']}")
+        print(f"Sample frequency category: {sample['frequency_category']}")
+        print(f"Sample activation target idx: {sample['activation_target_idx']}")
 
-    print("Dataset keys:", list(dataset.keys()))
-    if 'frequency_categories' in dataset:
-        print("Sample frequency categories:", dataset['frequency_categories'][:10])
-
+    target_layers = [1, 2, 3, 4, 5]
     records = extract_activations_from_dataset(
         model_name=model_name,
         checkpoints=checkpoints,
         dataset=dataset,
-        target_layers=[4],
+        target_layers=target_layers,
         activation_strategy="single"
     )
 
-    print(f"Extracted {len(records)} activation records")
+    print(f"\nExtracted {len(records)} activation records")
     if records:
-        print("Sample record categories:", [r['category'] for r in records[:10]])
+        print("Sample record categories:", [r['frequency_category'] for r in records[:10]])
 
     # Analyze patterns
     analysis = analyze_activation_patterns(records)
@@ -1019,7 +725,6 @@ def main():
     print(analysis)
 
     return records
-
 
 if __name__ == "__main__":
     records = main()

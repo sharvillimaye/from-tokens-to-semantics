@@ -2,8 +2,9 @@ import json
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from typing import Tuple, List, Dict, Any, Optional
-from collections import Counter
+from typing import List, Dict, Any
+
+from transformers import AutoTokenizer
 
 
 def load_json(file_path: Path) -> dict:
@@ -224,76 +225,66 @@ def get_frequency_categories(df: pd.DataFrame,
 
 def df_to_dataset(binned_df: pd.DataFrame) -> Dict[str, Any]:
     """
-    Convert binned DataFrame to dataset format. Need to embed phrases into semantically neutral template sentences.
-    
-    Args:
-        binned_df: DataFrame with phrases and their frequency categories
-        
-    Returns:
-        Dictionary with dataset format
+    Convert binned DataFrame to dataset format optimized for superposition research.
     """
-    from transformers import AutoTokenizer
-
+    
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
-
-    template_sentence: str = "The {phrase} is a geographical place"
-
-    def find_subsequence_end(haystack: List[int], needle: List[int]) -> Optional[int]:
-        """Return the end index of the last occurrence of `needle` in `haystack`, or None.
-
-        This searches for the contiguous subsequence `needle` inside `haystack` and returns
-        the index of the final token of the match. If multiple matches exist, the last one
-        is returned.
-        """
-        if not needle or not haystack or len(needle) > len(haystack):
-            return None
-        last_end: Optional[int] = None
-        first_token = needle[0]
-        max_start = len(haystack) - len(needle)
-        for start in range(0, max_start + 1):
-            if haystack[start] != first_token:
+    
+    # Research-optimized neutral template
+    template_sentence = "{phrase} is located in"
+    
+    def find_phrase_positions(sentence_ids: List[int], phrase_ids: List[int], phrase_text: str):
+        """Enhanced phrase position finding."""
+        if not phrase_ids or not sentence_ids:
+            return {"start": None, "end": None}
+        
+        # Try with space prefix first (common in middle of sentences), then plain
+        candidates = [
+            tokenizer.encode(" " + phrase_text, add_special_tokens=False),
+            phrase_ids,
+        ]
+        
+        for candidate in candidates:
+            if not candidate:
                 continue
-            if haystack[start:start + len(needle)] == needle:
-                last_end = start + len(needle) - 1
-        return last_end
-
-    dataset: List[Dict[str, Any]] = []
+            for i in range(len(sentence_ids) - len(candidate) + 1):
+                if sentence_ids[i:i+len(candidate)] == candidate:
+                    return {
+                        "start": i, 
+                        "end": i + len(candidate) - 1
+                    }
+        
+        return {"start": None, "end": None}
+    
+    dataset = []
     for _, row in binned_df.iterrows():
-        phrase = str(row['phrase'])
+        phrase = str(row['phrase']).strip()
         frequency_category = row['category']
         sentence = template_sentence.format(phrase=phrase)
-
-        # Token ids (not token strings) for reliable matching
-        sentence_ids: List[int] = tokenizer.encode(sentence, add_special_tokens=False)
-        phrase_ids_plain: List[int] = tokenizer.encode(phrase, add_special_tokens=False)
-        phrase_ids_space: List[int] = tokenizer.encode(" " + phrase, add_special_tokens=False)
-
-        # Prefer match with leading space (more likely inside sentence), then fallback
-        end_pos: Optional[int] = None
-        for candidate in (phrase_ids_space, phrase_ids_plain):
-            if candidate:
-                end_pos = find_subsequence_end(sentence_ids, candidate)
-            if end_pos is not None:
-                break
-
-        # Token strings for readability/debugging
-        tokens_sentence: List[str] = tokenizer.convert_ids_to_tokens(sentence_ids)
-        tokens_phrase: List[str] = tokenizer.convert_ids_to_tokens(
-            phrase_ids_space if (end_pos is not None and phrase_ids_space) else phrase_ids_plain
-        )
-
+        
+        sentence_ids = tokenizer.encode(sentence, add_special_tokens=False)
+        phrase_ids = tokenizer.encode(phrase, add_special_tokens=False)
+        positions = find_phrase_positions(sentence_ids, phrase_ids, phrase)
+        
         dataset.append({
             "phrase": phrase,
             "frequency_category": frequency_category,
             "sentence": sentence,
             "token_ids_sentence": sentence_ids,
-            "token_ids_phrase": phrase_ids_plain,
-            "tokens_sentence": tokens_sentence,
-            "tokens_phrase": tokens_phrase,
-            "phrase_last_token_index": end_pos,
+            "token_ids_phrase": phrase_ids,
+            "phrase_start_idx": positions["start"],
+            "phrase_end_idx": positions["end"],
+            "activation_target_idx": positions["end"],  # For extraction
+            "template_used": template_sentence
         })
+    
+    return {
+        "data": dataset,
+        "template": template_sentence,
+        "total_samples": len(dataset),
+        "categories": binned_df['category'].value_counts().to_dict()
+    }
 
-    return dataset
 
 # Example usage and testing
 if __name__ == "__main__":
@@ -340,9 +331,11 @@ if __name__ == "__main__":
     print(f"Median threshold: {binary_analysis['median_threshold']:,.0f}")
     
     # Save categorized data
-    categorized_df = get_frequency_categories(df, method="zipf")
+    categorized_df = get_frequency_categories(df, method="binary")
     print(categorized_df.head())
 
     dataset = df_to_dataset(categorized_df)
     print(dataset)
+    # save dataset to json
+    save_json(dataset, Path("/Applications/team-aasa/polytope/dataset.json"))
     
