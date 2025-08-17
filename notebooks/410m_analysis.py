@@ -45,7 +45,7 @@ def main():
     layers = list(range(24)) # Layers 0, 1,..., 23
     
     # Generate list of neurons
-    neurons = list(range(0, 4096, 20)) # 0, 20, 40, ..., 4080 (every 20th)
+    neurons = list(range(0, 4096, 200)) # 0, 20, 40, ..., 4080 (every 20th) NOW 200TH
     
     total_analyses = len(layers) * len(neurons)
     
