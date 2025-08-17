@@ -25,7 +25,7 @@ def run_checkpoint_analysis(layer, neuron):
         "--distance_threshold", "0.8",
         "--peak_activation", "2.8",
         "--max_examples", "100",
-        "--batch_size", "4"
+        "--batch_size", "128"
     ]
     
     start_time = time.time()
