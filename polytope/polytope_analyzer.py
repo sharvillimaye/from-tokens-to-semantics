@@ -1,44 +1,27 @@
 #!/usr/bin/env python3
 """
-Comprehensive Polytope Superposition Analyzer for LLM Activations
+Simplified Polytope Superposition Analyzer for LLM Activations
 
-This module implements a robust four-phase analysis pipeline for studying superposition
-phenomena in LLM activations, specifically designed to compare high vs low frequency
-n-gram patterns and understand geometric structure differences.
+This module implements a focused analysis pipeline for studying superposition
+phenomena in LLM activations, comparing high vs low frequency n-gram patterns.
 
-PIPELINE PHASES:
-===============
-
-Phase 1: Preprocessing with Binary Pattern Extraction
-- Converts activation vectors to binary patterns using thresholding
-- Computes sparsity metrics and unique pattern analysis
-- Handles high-dimensional data with optional sampling
-
-Phase 2: Polytope Boundary Analysis with Density Calculations  
-- Calculates polytope densities using Hamming vs Euclidean distance ratios
-- Identifies boundary crossings and geometric transitions
-- Uses efficient pairwise analysis with configurable limits
-
-Phase 3: Superposition Detection and Measurement
-- Measures vector overlaps and interference patterns
-- Calculates superposition strength and phase classification
-- Distinguishes between strong/weak superposition regimes
-
-Phase 4: Advanced Clustering Analysis with HDBSCAN
-- Applies semantic clustering to both binary patterns and activations
-- Measures cluster consistency between pattern and activation spaces
-- Includes t-SNE visualization and quality metrics
+CORE ANALYSIS:
+==============
+1. Binary Pattern Extraction using CETT thresholding
+2. Polytope Density Analysis using Hamming vs Euclidean distance ratios
+3. Superposition Measurement via interference patterns
+4. Direct Frequency Group Comparison
 
 DEPENDENCIES:
 ============
-pip install numpy scipy scikit-learn hdbscan pandas matplotlib seaborn
+pip install numpy scipy scikit-learn pandas matplotlib
 
 USAGE:
 ======
 from polytope.polytope_analyzer import SuperpositionAnalyzer
 
 # Initialize analyzer
-analyzer = SuperpositionAnalyzer(min_cluster_size=5, random_seed=42)
+analyzer = SuperpositionAnalyzer(random_seed=42)
 
 # Run analysis comparing high vs low frequency activations
 results = analyzer.analyze_polytope_superposition(
@@ -47,120 +30,194 @@ results = analyzer.analyze_polytope_superposition(
     semantic_category="n_grams"
 )
 
-# Generate comprehensive report
+# Generate simple report
 report = analyzer.generate_analysis_report(results)
 print(report)
-
-# Access detailed metrics
-print(f"Superposition difference: {results['comparison']['superposition_strength_difference']}")
-print(f"Phase transition: {results['comparison']['phase_transition']}")
-
-COMPUTATIONAL EFFICIENCY:
-========================
-- Automatic sampling for large datasets (>10K pairs in polytope analysis)
-- Sparse matrix operations for high-dimensional activations (>1K neurons)
-- Configurable clustering parameters based on dataset size
-- Memory-efficient pairwise distance calculations
-
-STATISTICAL ROBUSTNESS:
-======================
-- Bootstrap confidence intervals for key metrics
-- Effect size calculations (Cohen's d approximation)
-- Multiple comparison handling
-- Robust clustering with noise detection
 
 EXPECTED OUTPUTS:
 ================
 - Quantitative superposition strength differences between frequency groups
 - Geometric polytope structure characterization
 - Phase classification (strong vs weak superposition)
-- Statistical validation with confidence intervals
-- Mechanistic insights into n-gram frequency effects on neural representations
-
-Original Polytope Analysis Pipeline Components:
-- CETT-based spline code generation
-- Advanced boundary detection algorithms  
-- MASO framework integration
-- Safety polytope management
+- Direct comparison metrics between high and low frequency patterns
 """
 
-import numpy as np
-from scipy.spatial.distance import pdist, squareform
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from sklearn.manifold import TSNE
-from sklearn.metrics import adjusted_rand_score
-from typing import List, Dict, Any, Tuple, Optional
 from collections import defaultdict
+import hashlib
+import json
 from pathlib import Path
 import pickle
+from typing import Any, Dict, List, Optional, Tuple, cast
 import warnings
+
 from loguru import logger
-import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-
-
-# Required imports for advanced polytope analysis
-from hdbscan import HDBSCAN
+import numpy as np
+import pandas as pd
 from scipy.spatial.distance import cdist
-import scipy.sparse as sparse
-try:  # Optional dependency for dimensionality reduction before clustering
-    from umap import UMAP  # type: ignore
-    UMAP_AVAILABLE = True
-except Exception:  # pragma: no cover - environment may not have umap
-    UMAP_AVAILABLE = False
-
-# Optional imports for visualization and timestamps
-try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
-except ImportError:
-    PANDAS_AVAILABLE = False
+from scipy.stats import mannwhitneyu
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 try:
-    import matplotlib.pyplot as plt
-    PLOTTING_AVAILABLE = True
-except ImportError:
-    PLOTTING_AVAILABLE = False
-    plt = None
+    from hdbscan import HDBSCAN  # optional, used only if clustering function is called
+except Exception:
+    HDBSCAN = None  # type: ignore
+try:
+    from sklearn.metrics import silhouette_score  # optional
+except Exception:
+    silhouette_score = None  # type: ignore
 
-# Do not silence warnings globally; suppress only noisy sklearn alias warning
+# Suppress sklearn warnings
 warnings.filterwarnings(
     "ignore",
     category=FutureWarning,
-    module=r"sklearn\.utils\.deprecation",
-    message=r".*'force_all_finite' was renamed to 'ensure_all_finite'.*",
+    module=r"sklearn\.utils\.deprecation"
 )
 
 class SuperpositionAnalyzer:
     """
-    Comprehensive superposition analysis pipeline for LLM activations based on n-gram frequency.
+    Simplified superposition analysis pipeline for LLM activations based on n-gram frequency.
     
-    Implements four-phase analysis:
-    1. Preprocessing with binary pattern extraction
-    2. Polytope boundary analysis with density calculations  
-    3. Superposition detection and measurement
-    4. Advanced clustering analysis with semantic region identification
+    Implements focused analysis:
+    1. Binary pattern extraction using CETT thresholding
+    2. Polytope density calculations  
+    3. Superposition interference measurement
+    4. Direct frequency group comparison
     
     Usage:
         analyzer = SuperpositionAnalyzer()
         results = analyzer.analyze_polytope_superposition(high_freq_activations, low_freq_activations)
     """
     
-    def __init__(self, min_cluster_size: int = 5, random_seed: Optional[int] = 42):
+    def __init__(self, random_seed: Optional[int] = 42):
         """
-        Initialize superposition analyzer.
+        Initialize simplified superposition analyzer.
         
         Args:
-            min_cluster_size: Minimum cluster size for HDBSCAN
             random_seed: Random seed for reproducibility
         """
-        self.min_cluster_size = min_cluster_size
         self.random_seed = random_seed
         if random_seed is not None:
             np.random.seed(random_seed)
+        
+        # Initialize random number generator for consistent sampling
+        self.rng = np.random.default_rng(random_seed)
     
+    def _validate_inputs(self, activations: np.ndarray, binary_patterns: Optional[np.ndarray] = None, 
+                        spline_codes: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
+        """
+        Comprehensive input validation with detailed error messages.
+        
+        Args:
+            activations: Activation vectors
+            binary_patterns: Binary patterns (optional)
+            spline_codes: Spline codes (optional)
+        
+        Raises:
+            ValueError: If inputs are invalid
+        """
+        # Validate activations
+        if not isinstance(activations, np.ndarray):
+            raise ValueError("Activations must be a numpy array")
+        
+        if activations.ndim != 2:
+            raise ValueError(f"Activations must be 2D array, got shape {activations.shape}")
+        
+        if activations.shape[0] < 2:
+            raise ValueError(f"Need at least 2 samples, got {activations.shape[0]}")
+        
+        # Check for NaN/infinite values
+        if not np.isfinite(activations).all():
+            raise ValueError("Activations contain NaN or infinite values")
+        
+        # Validate binary patterns if provided
+        if binary_patterns is not None:
+            if not isinstance(binary_patterns, np.ndarray):
+                raise ValueError("Binary patterns must be a numpy array")
+            
+            # Handle dimension mismatch by truncating binary patterns to match activations
+            if binary_patterns.shape != activations.shape:
+                n_samples, n_features = activations.shape
+                if binary_patterns.shape[0] != n_samples:
+                    raise ValueError(f"Binary patterns must have same number of samples as activations ({n_samples})")
+                
+                # Truncate to match activation dimensions (common when spline_code has more dims)
+                if binary_patterns.shape[1] > n_features:
+                    logger.info(f"Truncating binary patterns from {binary_patterns.shape[1]} to {n_features} dimensions")
+                    binary_patterns = binary_patterns[:, :n_features]
+                elif binary_patterns.shape[1] < n_features:
+                    raise ValueError(f"Binary patterns have too few dimensions: {binary_patterns.shape[1]} < {n_features}")
+            
+            # Check if binary patterns are actually binary
+            unique_values = np.unique(binary_patterns)
+            if not np.array_equal(unique_values, np.array([0, 1])) and not np.all(np.isin(unique_values, [0, 1])):
+                logger.warning(f"Binary patterns contain non-binary values: {unique_values}")
+        
+        # Validate spline codes if provided
+        if spline_codes is not None:
+            if not isinstance(spline_codes, np.ndarray):
+                raise ValueError("Spline codes must be a numpy array")
+            
+            if len(spline_codes) != len(activations):
+                raise ValueError(f"Spline codes length {len(spline_codes)} must match activations length {len(activations)}")
+            
+            if spline_codes.ndim != 2:
+                raise ValueError(f"Spline codes must be 2D array, got shape {spline_codes.shape}")
+            
+            # Check if spline codes are binary
+            unique_values = np.unique(spline_codes)
+            if not np.all(np.isin(unique_values, [0, 1])):
+                logger.warning(f"Spline codes contain non-binary values: {unique_values}")
+        
+        # Return processed binary patterns (may have been truncated)
+        return binary_patterns
+    
+    def _safe_correlation(self, x: np.ndarray, y: np.ndarray) -> float:
+        """
+        Safely compute correlation coefficient with proper error handling.
+        
+        Args:
+            x, y: Input arrays
+            
+        Returns:
+            Correlation coefficient or 0.0 if computation fails
+        """
+        try:
+            if len(x) < 2 or len(y) < 2:
+                return 0.0
+            
+            # Check for constant arrays (zero variance)
+            if np.var(x) == 0 or np.var(y) == 0:
+                return 0.0
+            
+            correlation_matrix = np.corrcoef(x, y)
+            if np.isfinite(correlation_matrix).all():
+                return float(correlation_matrix[0, 1])
+            else:
+                return 0.0
+                
+        except Exception as e:
+            logger.warning(f"Correlation computation failed: {e}")
+            return 0.0
+    
+    def _compute_simple_stats(self, data: np.ndarray) -> Dict[str, float]:
+        """
+        Compute simple descriptive statistics replacing bootstrap complexity.
+        
+        Args:
+            data: Input data array
+            
+        Returns:
+            Dict with mean and standard error
+        """
+        if len(data) < 2:
+            return {'mean': 0.0, 'std_error': 0.0}
+        
+        mean_val = float(np.mean(data))
+        std_error = float(np.std(data) / np.sqrt(len(data)))
+        
+        return {'mean': mean_val, 'std_error': std_error}
 
     def compute_polytope_metrics(self, activations: np.ndarray, binary_patterns: np.ndarray, 
                                 max_pairs: int = 10000) -> Dict[str, Any]:
@@ -175,9 +232,10 @@ class SuperpositionAnalyzer:
         Returns:
             Dictionary with polytope metrics
         """
+        # Validate inputs and get potentially truncated binary patterns
+        binary_patterns = self._validate_inputs(activations, binary_patterns)
+        
         n_samples = len(activations)
-        if n_samples < 2:
-            raise ValueError("Need at least two samples to compute polytope metrics")
 
         # Build unique random pairs up to max_pairs (or all pairs if fewer)
         total_pairs = n_samples * (n_samples - 1) // 2
@@ -222,9 +280,13 @@ class SuperpositionAnalyzer:
         boundary_threshold = np.percentile(euc_valid, 25)
         boundary_crossings = int(np.sum((ham_valid > 0) & (euc_valid < boundary_threshold)))
         
+        # Compute simple descriptive statistics (removed bootstrap complexity)
+        density_stats = self._compute_simple_stats(densities)
+        
         return {
             'polytope_densities': densities,
-            'mean_density': float(np.mean(densities)),
+            'mean_density': density_stats['mean'],
+            'mean_density_std_error': density_stats['std_error'],
             'density_std': float(np.std(densities)),
             'boundary_crossings': boundary_crossings,
             'boundary_crossing_rate': float(boundary_crossings) / float(len(euc_valid)),
@@ -232,6 +294,388 @@ class SuperpositionAnalyzer:
                 '25th': float(np.percentile(densities, 25)),
                 '75th': float(np.percentile(densities, 75)),
                 '90th': float(np.percentile(densities, 90))
+            }
+        }
+    
+    
+    def analyze_ngram_polytope_mapping(self, records: List[Dict[str, Any]], 
+                                     spline_codes: np.ndarray) -> Dict[str, Any]:
+        """
+        Map n-grams directly to polytopes to discover emergent patterns.
+        
+        This analysis reveals:
+        1. Which n-grams share the same polytopes (potential polysemanticity)
+        2. Frequency-based polytope occupation patterns
+        3. N-gram diversity within polytopes
+        
+        Args:
+            records: List of activation records with n-gram metadata
+            spline_codes: Binary spline codes for polytope identification
+            
+        Returns:
+            Dictionary with n-gram to polytope mapping analysis
+        """
+        if len(records) != len(spline_codes):
+            raise ValueError("Records and spline codes must have same length")
+        
+        # Create polytope identifiers from spline codes
+        polytope_to_ngrams = defaultdict(list)
+        ngram_to_polytopes = defaultdict(set)
+        frequency_bins = defaultdict(lambda: defaultdict(list))
+        
+        for idx, record in enumerate(records):
+            # Get n-gram identifier
+            ngram = record.get('phrase', record.get('ngram', record.get('text', f'sample_{idx}')))
+            
+            # Get frequency category
+            freq_category = record.get('category', record.get('frequency_bin', 'unknown'))
+            
+            # Create polytope ID from spline code (fix collision bug)
+            polytope_id = tuple(spline_codes[idx].astype(int))
+            
+            # Map n-gram to polytope
+            polytope_to_ngrams[polytope_id].append({
+                'ngram': ngram,
+                'frequency_category': freq_category,
+                'record_index': idx,
+                'activation_vector': record.get('activation_vector'),
+                'spline_code': spline_codes[idx]
+            })
+            
+            ngram_to_polytopes[ngram].add(polytope_id)
+            frequency_bins[freq_category][polytope_id].append(ngram)
+        
+        # Analyze polytope sharing patterns
+        polysemantic_polytopes = {}  # Polytopes containing multiple different n-grams
+        monosemantic_polytopes = {}  # Polytopes containing only one type of n-gram
+        
+        for polytope_id, items in polytope_to_ngrams.items():
+            unique_ngrams = list(set(item['ngram'] for item in items))
+            
+            if len(unique_ngrams) == 1:
+                monosemantic_polytopes[polytope_id] = {
+                    'ngram': unique_ngrams[0],
+                    'count': len(items),
+                    'frequency_categories': list(set(item['frequency_category'] for item in items))
+                }
+            else:
+                polysemantic_polytopes[polytope_id] = {
+                    'ngrams': unique_ngrams,
+                    'ngram_counts': {ngram: sum(1 for item in items if item['ngram'] == ngram) 
+                                   for ngram in unique_ngrams},
+                    'total_samples': len(items),
+                    'frequency_mix': list(set(item['frequency_category'] for item in items))
+                }
+        
+        # Analyze n-gram distribution across polytopes
+        multi_polytope_ngrams = {ngram: list(polytopes) for ngram, polytopes in ngram_to_polytopes.items() 
+                               if len(polytopes) > 1}
+        
+        # Frequency-based polytope occupation analysis
+        frequency_polytope_stats = {}
+        for freq_cat, polytope_dict in frequency_bins.items():
+            frequency_polytope_stats[freq_cat] = {
+                'unique_polytopes': len(polytope_dict),
+                'total_samples': sum(len(ngrams) for ngrams in polytope_dict.values()),
+                'polytope_sharing': sum(1 for ngrams in polytope_dict.values() if len(set(ngrams)) > 1),
+                'avg_ngrams_per_polytope': float(np.mean([len(set(ngrams)) for ngrams in polytope_dict.values()]))
+            }
+        
+        return {
+            'polytope_to_ngrams': dict(polytope_to_ngrams),
+            'ngram_to_polytopes': dict(ngram_to_polytopes),
+            'polysemantic_polytopes': polysemantic_polytopes,
+            'monosemantic_polytopes': monosemantic_polytopes,
+            'multi_polytope_ngrams': multi_polytope_ngrams,
+            'frequency_polytope_stats': frequency_polytope_stats,
+            'summary_stats': {
+                'total_polytopes': len(polytope_to_ngrams),
+                'total_unique_ngrams': len(ngram_to_polytopes),
+                'polysemantic_polytope_count': len(polysemantic_polytopes),
+                'monosemantic_polytope_count': len(monosemantic_polytopes),
+                'polysemantic_fraction': len(polysemantic_polytopes) / len(polytope_to_ngrams) if polytope_to_ngrams else 0.0,
+                'ngrams_sharing_polytopes': len(multi_polytope_ngrams),
+                'avg_polytopes_per_ngram': float(np.mean([len(polytopes) for polytopes in ngram_to_polytopes.values()])) if ngram_to_polytopes else 0.0
+            }
+        }
+    
+    def test_polytope_monosemanticity(self, records: List[Dict[str, Any]], 
+                                    spline_codes: np.ndarray) -> Dict[str, Any]:
+        """
+        Test if samples with identical spline codes are semantically coherent.
+        
+        Core polytope lens prediction: Samples in the same polytope should
+        undergo similar network transformations and represent similar concepts.
+        
+        Args:
+            records: List of activation records with semantic metadata
+            spline_codes: Binary spline codes for polytope identification
+            
+        Returns:
+            Dictionary with monosemanticity analysis results
+        """
+        if len(records) != len(spline_codes):
+            raise ValueError("Records and spline codes must have same length")
+        
+        # Group samples by identical spline codes (same polytope)
+        polytope_groups = defaultdict(list)
+        for idx, record in enumerate(records):
+            code_hash = tuple(spline_codes[idx].astype(int))
+            polytope_groups[code_hash].append({
+                'index': idx,
+                'record': record,
+                'ngram': record.get('phrase', record.get('ngram', record.get('text', f'sample_{idx}'))),
+                'frequency_category': record.get('category', record.get('frequency_bin', 'unknown')),
+                'spline_code': spline_codes[idx]
+            })
+        
+        monosemantic_polytopes = 0
+        polysemantic_polytopes = 0
+        polytope_analysis = {}
+        
+        for polytope_id, group in polytope_groups.items():
+            if len(group) < 2:  # Skip single-sample polytopes
+                continue
+                
+            # Extract n-grams in this polytope
+            ngrams_in_polytope = [item['ngram'] for item in group]
+            unique_ngrams = list(set(ngrams_in_polytope))
+            
+            # Extract frequency categories
+            freq_categories = [item['frequency_category'] for item in group]
+            unique_freq_categories = list(set(freq_categories))
+            
+            is_monosemantic = len(unique_ngrams) == 1
+            
+            polytope_analysis[polytope_id] = {
+                'sample_count': len(group),
+                'unique_ngrams': unique_ngrams,
+                'unique_ngram_count': len(unique_ngrams),
+                'frequency_categories': unique_freq_categories,
+                'is_monosemantic': is_monosemantic,
+                'ngram_distribution': {ngram: ngrams_in_polytope.count(ngram) for ngram in unique_ngrams},
+                'frequency_distribution': {cat: freq_categories.count(cat) for cat in unique_freq_categories}
+            }
+            
+            if is_monosemantic:
+                monosemantic_polytopes += 1
+            else:
+                polysemantic_polytopes += 1
+        
+        total_multi_sample_polytopes = monosemantic_polytopes + polysemantic_polytopes
+        
+        # Analyze frequency-based polytope sharing patterns
+        frequency_sharing_analysis = {}
+        for freq_cat in ['high_freq', 'low_freq', 'mid_freq']:
+            freq_polytopes = [pid for pid, analysis in polytope_analysis.items() 
+                            if freq_cat in analysis['frequency_categories']]
+            
+            mixed_freq_polytopes = [pid for pid in freq_polytopes 
+                                  if len(polytope_analysis[pid]['frequency_categories']) > 1]
+            
+            frequency_sharing_analysis[freq_cat] = {
+                'total_polytopes': len(freq_polytopes),
+                'mixed_frequency_polytopes': len(mixed_freq_polytopes),
+                'pure_frequency_fraction': (len(freq_polytopes) - len(mixed_freq_polytopes)) / len(freq_polytopes) if freq_polytopes else 0.0
+            }
+        
+        return {
+            'polytope_analysis': polytope_analysis,
+            'monosemantic_polytope_count': monosemantic_polytopes,
+            'polysemantic_polytope_count': polysemantic_polytopes,
+            'total_multi_sample_polytopes': total_multi_sample_polytopes,
+            'monosemantic_fraction': monosemantic_polytopes / total_multi_sample_polytopes if total_multi_sample_polytopes > 0 else 0,
+            'polysemantic_fraction': polysemantic_polytopes / total_multi_sample_polytopes if total_multi_sample_polytopes > 0 else 0,
+            'frequency_sharing_analysis': frequency_sharing_analysis,
+            'summary_stats': {
+                'avg_samples_per_polytope': float(np.mean([len(group) for group in polytope_groups.values() if len(group) >= 2])) if polytope_groups else 0.0,
+                'max_samples_per_polytope': max(len(group) for group in polytope_groups.values()) if polytope_groups else 0,
+                'avg_ngrams_per_polytope': float(np.mean([analysis['unique_ngram_count'] for analysis in polytope_analysis.values()])) if polytope_analysis else 0.0
+            }
+        }
+    
+    def analyze_frequency_polytope_relationship(self, records: List[Dict[str, Any]], 
+                                              spline_codes: np.ndarray) -> Dict[str, Any]:
+        """
+        Test the core hypothesis: frequency affects polytope structure and sharing patterns.
+        
+        Analyzes whether mid-frequency n-grams show higher polytope sharing compared
+        to high/low frequency n-grams, supporting polysemanticity hypothesis.
+        
+        Args:
+            records: List of activation records with frequency metadata
+            spline_codes: Binary spline codes for polytope identification
+            
+        Returns:
+            Dictionary with frequency-polytope relationship analysis
+        """
+        if len(records) != len(spline_codes):
+            raise ValueError("Records and spline codes must have same length")
+        
+        # Organize by frequency bins
+        frequency_bins = {'low_freq': [], 'mid_freq': [], 'high_freq': []}
+        
+        for idx, record in enumerate(records):
+            category = record.get('category', record.get('frequency_bin', 'unknown'))
+            # Normalize category names
+            if category.lower() in ['low_freq', 'low_frequency', 'low']:
+                bin_name = 'low_freq'
+            elif category.lower() in ['mid_freq', 'mid_frequency', 'medium', 'mid']:
+                bin_name = 'mid_freq'  
+            elif category.lower() in ['high_freq', 'high_frequency', 'high']:
+                bin_name = 'high_freq'
+            else:
+                continue  # Skip unknown categories
+                
+            frequency_bins[bin_name].append({
+                'index': idx,
+                'record': record,
+                'spline_code': spline_codes[idx],
+                'ngram': record.get('phrase', record.get('ngram', record.get('text', f'sample_{idx}')))
+            })
+        
+        results = {}
+        for bin_name, bin_records in frequency_bins.items():
+            if not bin_records:
+                continue
+                
+            bin_spline_codes = np.array([item['spline_code'] for item in bin_records])
+            
+            # Unique polytope count
+            unique_codes = np.unique(bin_spline_codes, axis=0)
+            unique_polytope_count = len(unique_codes)
+            
+            # Polytope sharing analysis
+            polytope_counts = defaultdict(int)
+            polytope_to_ngrams = defaultdict(set)
+            
+            for item in bin_records:
+                code_hash = tuple(item['spline_code'].astype(int))
+                polytope_counts[code_hash] += 1
+                polytope_to_ngrams[code_hash].add(item['ngram'])
+            
+            # Calculate sharing metrics
+            shared_polytopes = sum(1 for count in polytope_counts.values() if count > 1)
+            total_samples = len(bin_records)
+            polytope_reuse_rate = shared_polytopes / total_samples if total_samples > 0 else 0
+            samples_per_polytope = total_samples / unique_polytope_count if unique_polytope_count > 0 else 0
+            
+            # N-gram diversity within polytopes
+            polysemantic_polytopes = sum(1 for ngrams in polytope_to_ngrams.values() if len(ngrams) > 1)
+            ngram_diversity_score = polysemantic_polytopes / len(polytope_to_ngrams) if polytope_to_ngrams else 0
+            
+            # Boundary crossing analysis for this frequency bin
+            boundary_crossings = []
+            if len(bin_spline_codes) >= 2:
+                for i in range(len(bin_spline_codes)):
+                    for j in range(i + 1, min(i + 50, len(bin_spline_codes))):  # Sample to avoid O(n^2)
+                        hamming_dist = int(np.sum(bin_spline_codes[i] != bin_spline_codes[j]))
+                        if hamming_dist > 0:  # Different polytopes
+                            boundary_crossings.append(hamming_dist)
+            
+            results[bin_name] = {
+                'sample_count': total_samples,
+                'unique_polytope_count': unique_polytope_count,
+                'shared_polytope_count': shared_polytopes,
+                'polytope_reuse_rate': polytope_reuse_rate,
+                'samples_per_polytope': samples_per_polytope,
+                'polysemantic_polytope_count': polysemantic_polytopes,
+                'ngram_diversity_score': ngram_diversity_score,
+                'avg_boundary_crossings': float(np.mean(boundary_crossings)) if boundary_crossings else 0.0,
+                'unique_ngram_count': len(set(item['ngram'] for item in bin_records))
+            }
+        
+        # Test core hypothesis with statistical significance
+        hypothesis_tests = {}
+        statistical_tests = {}
+        
+        if all(bin_name in results for bin_name in ['low_freq', 'mid_freq', 'high_freq']):
+            # Extract raw data for statistical testing
+            sharing_data = {}
+            diversity_data = {}
+            
+            for bin_name in ['low_freq', 'mid_freq', 'high_freq']:
+                bin_records = frequency_bins[bin_name]
+                if not bin_records:
+                    continue
+                
+                # Compute individual polytope sharing rates for statistical testing
+                bin_polytope_counts = defaultdict(int)
+                for item in bin_records:
+                    code_hash = tuple(item['spline_code'].astype(int))
+                    bin_polytope_counts[code_hash] += 1
+                
+                # Individual sharing indicators (0/1 for each sample)
+                sharing_indicators = []
+                diversity_scores = []
+                
+                for item in bin_records:
+                    code_hash = tuple(item['spline_code'].astype(int))
+                    # Binary: is this sample in a shared polytope?
+                    sharing_indicators.append(1 if bin_polytope_counts[code_hash] > 1 else 0)
+                    
+                    # Add some noise for diversity (placeholder - could be improved with actual diversity metric)
+                    diversity_scores.append(np.random.normal(results[bin_name]['ngram_diversity_score'], 0.1))
+                
+                sharing_data[bin_name] = sharing_indicators
+                diversity_data[bin_name] = diversity_scores
+            
+            # Statistical hypothesis testing
+            try:
+                # Test 1: Mid-frequency has highest sharing rate
+                if all(bin_name in sharing_data for bin_name in ['low_freq', 'mid_freq', 'high_freq']):
+                    # Direct pairwise Mann-Whitney U tests (simplified from complex statistical testing)
+                    mid_vs_low_stat, mid_vs_low_p = mannwhitneyu(
+                        sharing_data['mid_freq'], sharing_data['low_freq'], alternative='greater'
+                    )
+                    mid_vs_high_stat, mid_vs_high_p = mannwhitneyu(
+                        sharing_data['mid_freq'], sharing_data['high_freq'], alternative='greater'
+                    )
+                    
+                    statistical_tests['mid_vs_low_sharing_p'] = float(mid_vs_low_p)
+                    statistical_tests['mid_vs_high_sharing_p'] = float(mid_vs_high_p)
+                    
+                    # Bonferroni correction for multiple comparisons
+                    corrected_alpha = 0.05 / 2
+                    statistical_tests['bonferroni_corrected_alpha'] = corrected_alpha
+                    statistical_tests['mid_freq_significantly_highest'] = (
+                        mid_vs_low_p < corrected_alpha and mid_vs_high_p < corrected_alpha
+                    )
+            
+            except Exception as e:
+                logger.warning(f"Statistical testing failed: {e}")
+                statistical_tests['error'] = str(e)
+            
+            # Original deterministic tests (now with statistical backing)
+            mid_sharing = results['mid_freq']['polytope_reuse_rate']
+            low_sharing = results['low_freq']['polytope_reuse_rate']
+            high_sharing = results['high_freq']['polytope_reuse_rate']
+            
+            hypothesis_tests['mid_freq_highest_sharing'] = (
+                mid_sharing > low_sharing and mid_sharing > high_sharing
+            )
+            
+            hypothesis_tests['mid_freq_highest_diversity'] = (
+                results['mid_freq']['ngram_diversity_score'] > results['low_freq']['ngram_diversity_score'] and
+                results['mid_freq']['ngram_diversity_score'] > results['high_freq']['ngram_diversity_score']
+            )
+            
+            # Expected pattern: mid > low > high for polytope sharing
+            hypothesis_tests['expected_sharing_pattern'] = (
+                results['mid_freq']['samples_per_polytope'] > results['low_freq']['samples_per_polytope'] > results['high_freq']['samples_per_polytope']
+            )
+        
+        return {
+            'frequency_bin_results': results,
+            'hypothesis_tests': hypothesis_tests,
+            'statistical_tests': statistical_tests,
+            'cross_frequency_comparison': {
+                'polytope_reuse_ranking': sorted(results.keys(), 
+                                               key=lambda x: results[x]['polytope_reuse_rate'], 
+                                               reverse=True) if results else [],
+                'diversity_ranking': sorted(results.keys(),
+                                          key=lambda x: results[x]['ngram_diversity_score'],
+                                          reverse=True) if results else []
             }
         }
     
@@ -323,225 +767,43 @@ class SuperpositionAnalyzer:
             }
         }
     
-    def clustering_analysis(self, binary_patterns: np.ndarray, activations: np.ndarray) -> Dict[str, Any]:
-        """
-        Phase 4: Advanced clustering analysis with HDBSCAN.
-        
-        Args:
-            binary_patterns: Binary polytope patterns
-            activations: Activation vectors
+    def analyze_spline_code_clustering(groups):
+        """take in spline codes of each group and cluster"""
+        # cluster the spline codes
+        if HDBSCAN is None or silhouette_score is None:
+            raise ImportError("Clustering requires hdbscan and sklearn.metrics.silhouette_score to be installed.")
+        results = {}
+        for frequency_group, spline_codes in groups.items():
+            clusterer = HDBSCAN(min_cluster_size=5, metric='hamming')
+            cluster_labels = clusterer.fit_predict(spline_codes)
+            # store the cluster labels
+            groups[frequency_group]['cluster_labels'] = cluster_labels
+            # Measure clustering quality
+            n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
             
-        Returns:
-            Dictionary with clustering results
-        """
-        # Dimensionality reduction for high-dimensional inputs (UMAP) before clustering
-        bin_for_cluster = binary_patterns
-        act_for_cluster = activations
-        # Use UMAP only when dimensionality is high and sample size supports it; otherwise PCA fallback
-        n_samples_bin = len(binary_patterns)
-        n_samples_act = len(activations)
-        
-        # For binary patterns: use UMAP only with sufficient samples and dimensions
-        if binary_patterns.shape[1] > 100 and n_samples_bin > 15:
-            if UMAP_AVAILABLE:
-                try:
-                    # More conservative UMAP settings for small sample sizes
-                    n_components = min(20, max(2, min(binary_patterns.shape[1] // 20, n_samples_bin // 2)))
-                    n_neighbors = min(5, max(2, n_samples_bin // 4))
-                    
-                    reducer_bin = UMAP(
-                        n_components=n_components,
-                        n_neighbors=n_neighbors,
-                        metric='hamming',
-                        random_state=self.random_seed,
-                        low_memory=True,
-                        verbose=False
+            if n_clusters > 1:
+                # Silhouette score for cluster separation
+                valid_mask = cluster_labels != -1
+                if np.sum(valid_mask) > 1:
+                    silhouette = silhouette_score(
+                        spline_codes[valid_mask], 
+                        cluster_labels[valid_mask], 
+                        metric='hamming'
                     )
-                    bin_for_cluster = reducer_bin.fit_transform(binary_patterns)
-                except Exception as e:
-                    logger.warning(f"UMAP failed for binary patterns: {e}, falling back to PCA")
-                    # PCA fallback for small N or UMAP issues
-                    n_comp = max(2, min(20, n_samples_bin - 1, binary_patterns.shape[1] - 1))
-                    pca_bin = PCA(n_components=n_comp, random_state=self.random_seed)
-                    bin_for_cluster = pca_bin.fit_transform(binary_patterns.astype(float))
+                else:
+                    silhouette = 0
             else:
-                # If UMAP not available, try PCA reduction
-                try:
-                    n_comp = max(2, min(20, n_samples_bin - 1, binary_patterns.shape[1] - 1))
-                    pca_bin = PCA(n_components=n_comp, random_state=self.random_seed)
-                    bin_for_cluster = pca_bin.fit_transform(binary_patterns.astype(float))
-                except Exception:
-                    bin_for_cluster = binary_patterns
-        elif binary_patterns.shape[1] > 50:  # Medium dimensionality: try PCA
-            try:
-                n_comp = max(2, min(20, n_samples_bin - 1, binary_patterns.shape[1] - 1))
-                pca_bin = PCA(n_components=n_comp, random_state=self.random_seed)
-                bin_for_cluster = pca_bin.fit_transform(binary_patterns.astype(float))
-            except Exception:
-                bin_for_cluster = binary_patterns
-
-        # For activation vectors: use UMAP only with sufficient samples and dimensions
-        if activations.shape[1] > 100 and n_samples_act > 15:
-            if UMAP_AVAILABLE:
-                try:
-                    # More conservative UMAP settings for small sample sizes
-                    n_components = min(20, max(2, min(activations.shape[1] // 20, n_samples_act // 2)))
-                    n_neighbors = min(5, max(2, n_samples_act // 4))
-                    
-                    reducer_act = UMAP(
-                        n_components=n_components,
-                        n_neighbors=n_neighbors,
-                        metric='euclidean',
-                        random_state=self.random_seed,
-                        low_memory=True,
-                        verbose=False
-                    )
-                    act_for_cluster = reducer_act.fit_transform(activations)
-                except Exception as e:
-                    logger.warning(f"UMAP failed for activations: {e}, falling back to PCA")
-                    n_comp = max(2, min(20, n_samples_act - 1, activations.shape[1] - 1))
-                    pca_act = PCA(n_components=n_comp, random_state=self.random_seed)
-                    act_for_cluster = pca_act.fit_transform(activations)
-            else:
-                try:
-                    n_comp = max(2, min(20, n_samples_act - 1, activations.shape[1] - 1))
-                    pca_act = PCA(n_components=n_comp, random_state=self.random_seed)
-                    act_for_cluster = pca_act.fit_transform(activations)
-                except Exception:
-                    act_for_cluster = activations
-        elif activations.shape[1] > 50:  # Medium dimensionality: try PCA
-            try:
-                n_comp = max(2, min(20, n_samples_act - 1, activations.shape[1] - 1))
-                pca_act = PCA(n_components=n_comp, random_state=self.random_seed)
-                act_for_cluster = pca_act.fit_transform(activations)
-            except Exception:
-                act_for_cluster = activations
-
-        # HDBSCAN on reduced (or original) spaces
-        clusterer_binary = HDBSCAN(
-            min_cluster_size=max(2, self.min_cluster_size, int(np.sqrt(len(bin_for_cluster))//2)),
-            metric='euclidean',
-            cluster_selection_method='eom'
-        )
-        binary_clusters = clusterer_binary.fit_predict(bin_for_cluster)
-        
-        # HDBSCAN on activation vectors
-        clusterer_activations = HDBSCAN(
-            min_cluster_size=max(2, self.min_cluster_size, int(np.sqrt(len(act_for_cluster))//2)),
-            metric='euclidean',
-            cluster_selection_method='eom'
-        )
-        activation_clusters = clusterer_activations.fit_predict(act_for_cluster)
-        
-        # Compare cluster consistency
-        cluster_consistency = adjusted_rand_score(binary_clusters, activation_clusters)
-        
-        # Dimensionality reduction for visualization
-        if len(binary_patterns) < 10:
-            binary_embedding = None
-        else:
-            # Create distance matrix for binary patterns
-            max_tsne_points = 2000
-            if len(binary_patterns) > max_tsne_points:
-                # Sample for TSNE to avoid O(N^2) memory/time
-                rng = np.random.default_rng(self.random_seed)
-                idx = rng.choice(len(binary_patterns), size=max_tsne_points, replace=False)
-                bp_tsne = binary_patterns[idx]
-            else:
-                bp_tsne = binary_patterns
-
-            binary_distances = squareform(pdist(bp_tsne, metric='hamming'))
-            perplexity = min(30, max(5, len(bp_tsne)//4))
-            tsne = TSNE(n_components=2, random_state=self.random_seed, metric='precomputed', 
-                       perplexity=perplexity, init='random')
-            binary_embedding = tsne.fit_transform(binary_distances)
-        
-        # Cluster quality metrics
-        n_clusters_binary = len(set(binary_clusters)) - (1 if -1 in binary_clusters else 0)
-        n_clusters_activation = len(set(activation_clusters)) - (1 if -1 in activation_clusters else 0)
-        
-        # Silhouette analysis
-        from sklearn.metrics import silhouette_score
-        # Filter out noise labels (-1)
-        valid_bin = binary_clusters != -1
-        if n_clusters_binary > 1 and np.sum(valid_bin) > 1 and len(np.unique(binary_clusters[valid_bin])) > 1:
-            silhouette_binary = silhouette_score(binary_patterns[valid_bin], binary_clusters[valid_bin], metric='hamming')
-        else:
-            silhouette_binary = None
+                silhouette = 0
             
-        valid_act = activation_clusters != -1
-        if n_clusters_activation > 1 and np.sum(valid_act) > 1 and len(np.unique(activation_clusters[valid_act])) > 1:
-            silhouette_activation = silhouette_score(activations[valid_act], activation_clusters[valid_act])
-        else:
-            silhouette_activation = None
-        
-        return {
-            'binary_clusters': binary_clusters,
-            'activation_clusters': activation_clusters,
-            'cluster_consistency': cluster_consistency,
-            'binary_embedding': binary_embedding,
-            'n_clusters_binary': n_clusters_binary,
-            'n_clusters_activation': n_clusters_activation,
-            'silhouette_binary': silhouette_binary,
-            'silhouette_activation': silhouette_activation,
-            'noise_fraction_binary': np.mean(binary_clusters == -1),
-            'noise_fraction_activation': np.mean(activation_clusters == -1)
-        }
-
-    def compute_spline_codes(self,
-                              binary_patterns: np.ndarray,
-                              require_true_relu_masks: bool = False) -> np.ndarray:
-        """
-        Compute spline codes that identify polytope regions.
-        Current implementation proxies spline codes with CETT-derived binary patterns.
-        If require_true_relu_masks is True and true ReLU masks are not provided, raises an error.
-        """
-        # NOTE: True spline codes require capturing pre-activation sign patterns at non-linearities.
-        # The current dataset contains post-layer activations and CETT binary patterns. We proxy with these.
-        if require_true_relu_masks:
-            raise RuntimeError("True spline codes require ReLU/GELU pre-activation masks during extraction. Re-run checkpoint extraction to capture masks.")
-        return binary_patterns.copy()
-
-    def compute_polytope_face_density(self,
-                                      activations: np.ndarray,
-                                      spline_codes: np.ndarray,
-                                      max_hamming: int = 2) -> Dict[str, Any]:
-        """
-        Compute a proxy for polytope face density by counting nearby hyperplane crossings.
-        For each sample i, sum hamming_distance(code_i, code_j) / euclidean_distance(x_i, x_j)
-        over neighbors j whose hamming distance <= max_hamming.
-
-        Returns per-sample densities and summary statistics.
-        """
-        if len(activations) != len(spline_codes):
-            raise ValueError("activations and spline_codes must have the same number of samples")
-        if len(activations) < 2:
-            raise ValueError("Need at least two samples to compute face densities")
-
-        n = len(activations)
-        densities = np.zeros(n, dtype=float)
-        for i in range(n):
-            # Vectorized distances to all points
-            diffs = activations - activations[i]
-            euc = np.linalg.norm(diffs, axis=1)
-            ham = np.sum(spline_codes != spline_codes[i], axis=1)
-            mask = (ham > 0) & (ham <= max_hamming) & (euc > 1e-12)
-            if np.any(mask):
-                densities[i] = float(np.sum(ham[mask] / euc[mask]))
-            else:
-                densities[i] = 0.0
-
-        return {
-            'face_density_per_sample': densities,
-            'face_density_mean': float(np.mean(densities)),
-            'face_density_std': float(np.std(densities)),
-            'face_density_percentiles': {
-                '25th': float(np.percentile(densities, 25)),
-                '50th': float(np.percentile(densities, 50)),
-                '75th': float(np.percentile(densities, 75)),
+            results[frequency_group] = {
+                'n_clusters': n_clusters,
+                'silhouette_score': silhouette,
+                'noise_fraction': np.mean(cluster_labels == -1),
+                'cluster_purity': silhouette  # Higher = better separated
             }
-        }
-
+        
+        return results
+    
     def compute_pattern_entropy(self, codes: np.ndarray) -> float:
         """Shannon entropy of row-wise patterns."""
         if codes.size == 0:
@@ -603,39 +865,6 @@ class SuperpositionAnalyzer:
                 sims_list.append(float(np.dot(A_norm[i], A_norm[j])))
             sims_arr = np.array(sims_list)
         return float(np.mean(np.abs(sims_arr))) if sims_arr.size else 0.0
-
-    def measure_feature_superposition(self,
-                                      activations: np.ndarray,
-                                      spline_codes: np.ndarray,
-                                      n_features_est: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Enhanced superposition summary using polytope diversity and interference proxy.
-        """
-        n_samples, n_dims = activations.shape
-        if n_samples == 0 or n_dims == 0:
-            return {
-                'superposition_ratio': 0.0,
-                'estimated_features': 0,
-                'interference_strength': 0.0,
-                'phase_classification': 'unknown',
-                'polytope_diversity': {'unique_fraction': 0.0, 'entropy': 0.0},
-            }
-
-        if n_features_est is None:
-            n_features_est = self.estimate_feature_count(spline_codes)
-
-        superposition_ratio = float(n_features_est) / float(n_dims)
-        interference_strength = self.compute_interference_strength(activations)
-        phase_boundary = 1.0  # nominal threshold; interpret relative to n_dims and task
-        phase = "strong" if superposition_ratio > phase_boundary else "weak"
-
-        return {
-            'superposition_ratio': float(superposition_ratio),
-            'estimated_features': int(n_features_est),
-            'interference_strength': float(interference_strength),
-            'phase_classification_enhanced': phase,
-            'polytope_diversity': self.compute_polytope_diversity(spline_codes),
-        }
 
     def compute_polytope_region_metrics(self, spline_codes: np.ndarray) -> Dict[str, Any]:
         """Compute region-level metrics from codes: count, entropy, concentration (Gini)."""
@@ -702,7 +931,7 @@ class SuperpositionAnalyzer:
         
         # Key metrics to compare
         metrics = ['mean_density', 'compression_ratio',
-                   'n_unique_patterns', 'cluster_consistency', 'interference_per_dimension',
+                   'n_unique_patterns', 'pattern_diversity', 'interference_per_dimension',
                    'participation_ratio']
         
         for metric in metrics:
@@ -723,7 +952,7 @@ class SuperpositionAnalyzer:
                     lf_arr = low_freq_results.get('polytope_densities', None)
                     if hf_arr is not None and lf_arr is not None and len(hf_arr) > 1 and len(lf_arr) > 1:
                         pooled_std = np.sqrt((np.var(hf_arr, ddof=1) + np.var(lf_arr, ddof=1)) / 2.0)
-                    if pooled_std > 0:
+                        if pooled_std > 0:
                             comparison[f'{metric}_effect_size'] = (np.mean(hf_arr) - np.mean(lf_arr)) / pooled_std
         
         # Superposition strength difference
@@ -739,250 +968,14 @@ class SuperpositionAnalyzer:
         comparison['phase_transition'] = f"{high_phase}_to_{low_phase}"
         
         return comparison
-    
-    def bootstrap_confidence_intervals(self, data: np.ndarray, n_bootstrap: int = 1000, 
-                                     confidence: float = 0.95) -> Dict[str, float]:
-        """
-        Compute bootstrap confidence intervals for statistical robustness.
-        
-        Args:
-            data: Input data array
-            n_bootstrap: Number of bootstrap samples
-            confidence: Confidence level
-            
-        Returns:
-            Dictionary with confidence interval bounds
-        """
-        if len(data) == 0:
-            raise ValueError("Cannot compute confidence intervals for empty data")
-            
-        bootstrap_means = []
-        for _ in range(n_bootstrap):
-            bootstrap_sample = np.random.choice(data, size=len(data), replace=True)
-            bootstrap_means.append(np.mean(bootstrap_sample))
-        
-        alpha = 1 - confidence
-        lower_percentile = (alpha/2) * 100
-        upper_percentile = (1 - alpha/2) * 100
-        
-        return {
-            'lower': np.percentile(bootstrap_means, lower_percentile),
-            'upper': np.percentile(bootstrap_means, upper_percentile),
-            'mean': np.mean(bootstrap_means)
-        }
-    
-    def analyze_polytope_superposition(self,
-                                       activations_high_freq: np.ndarray,
-                                     activations_low_freq: np.ndarray,
-                                       semantic_category: str = "n_grams",
-                                        binary_patterns_high: Optional[np.ndarray] = None,
-                                        binary_patterns_low: Optional[np.ndarray] = None,
-                                        spline_codes_high: Optional[np.ndarray] = None,
-                                        spline_codes_low: Optional[np.ndarray] = None) -> Dict[str, Any]:
-        """
-        Complete integrated analysis pipeline comparing high vs low frequency n-grams.
-        
-        Args:
-            activations_high_freq: High frequency n-gram activations
-            activations_low_freq: Low frequency n-gram activations
-            semantic_category: Category label for analysis
-            
-        Returns:
-            Comprehensive analysis results with comparative metrics
-        """
-        results = {}
-        
-        for freq_type, activations in [("high_freq", activations_high_freq), 
-                                      ("low_freq", activations_low_freq)]:
-            
-            logger.info(f"Analyzing {freq_type} activations: {activations.shape}")
-            
-            # Phase 1: Binary patterns
-            # Prefer provided CETT-derived patterns, else compute CETT-based binarization per sample
-            if freq_type == 'high_freq' and binary_patterns_high is not None:
-                binary_patterns = binary_patterns_high
-            elif freq_type == 'low_freq' and binary_patterns_low is not None:
-                binary_patterns = binary_patterns_low
-            else:
-                # Local CETT implementation (avoid cross-module heavy imports)
-                def _cett_threshold(vec: np.ndarray, target_cett: float = 0.01) -> float:
-                    magnitudes = np.abs(vec)
-                    if not np.any(magnitudes):
-                        return 0.0
-                    sorted_mags = np.sort(magnitudes)
-                    total_norm = np.linalg.norm(vec)
-                    if total_norm == 0:
-                        return 0.0
-                    left, right = 0, len(sorted_mags) - 1
-                    best = 0.0
-                    while left <= right:
-                        mid = (left + right) // 2
-                        thr = sorted_mags[mid]
-                        tail = vec[magnitudes < thr]
-                        tail_norm = np.linalg.norm(tail)
-                        current = tail_norm / total_norm
-                        if current <= target_cett:
-                            best = thr
-                            left = mid + 1
-                        else:
-                            right = mid - 1
-                    return best
-
-                thresholds = np.array([_cett_threshold(v) for v in activations])
-                binary_patterns = (np.abs(activations) > thresholds[:, None]).astype(int)
-            
-            processed = {
-                'binary_patterns': binary_patterns,
-                'sparsity': np.mean(binary_patterns, axis=1),
-                'n_active_neurons': np.sum(binary_patterns, axis=1),
-                'activation_norms': np.linalg.norm(activations, axis=1)
-            }
-            
-            # Phase 2: Polytope Analysis
-            polytope_metrics = self.compute_polytope_metrics(
-                activations, processed['binary_patterns']
-            )
-            # Additional boundary density proxy via local flip rates
-            flip_metrics = self.compute_knn_flip_rate(
-                processed['binary_patterns'], activations, k=min(10, max(2, int(np.sqrt(len(activations))//2)))
-            )
-            # Prefer true spline codes if provided; otherwise proxy via CETT patterns
-            if freq_type == 'high_freq' and spline_codes_high is not None:
-                spline_codes = spline_codes_high
-            elif freq_type == 'low_freq' and spline_codes_low is not None:
-                spline_codes = spline_codes_low
-            else:
-                spline_codes = self.compute_spline_codes(processed['binary_patterns'])
-            region_metrics = self.compute_polytope_region_metrics(spline_codes)
-
-            # Optional geometric face density using spline codes
-            try:
-                face_density = self.compute_polytope_face_density(activations, spline_codes)
-            except Exception as _:
-                face_density = {
-                    'face_density_per_sample': np.zeros(len(activations), dtype=float),
-                    'face_density_mean': np.nan,
-                    'face_density_std': np.nan,
-                    'face_density_percentiles': {'25th': np.nan, '50th': np.nan, '75th': np.nan},
-                }
-            
-            # Phase 3: Superposition Measurement  
-            superposition_metrics = self.measure_superposition(
-                activations, processed['binary_patterns']
-            )
-
-            # Enhanced superposition summary leveraging spline codes
-            enhanced_superposition = self.measure_feature_superposition(activations, spline_codes)
-            
-            # Phase 4: Clustering Analysis
-            clustering_results = self.clustering_analysis(
-                processed['binary_patterns'], activations
-            )
-            
-            # Bootstrap confidence intervals for key metrics
-            density_ci = self.bootstrap_confidence_intervals(polytope_metrics['polytope_densities'])
-            
-            # Combine results
-            results[freq_type] = {
-                **processed,
-                **polytope_metrics, 
-                **{f'knn_{k}': v for k, v in flip_metrics.items()},
-                **{f'region_{k}': v for k, v in region_metrics.items()},
-                **superposition_metrics,
-                **{f'face_{k}': v for k, v in face_density.items()},
-                **{f'enh_{k}': v for k, v in enhanced_superposition.items()},
-                **clustering_results,
-                'density_confidence_interval': density_ci,
-                'semantic_category': semantic_category
-            }
-        
-        # Comparative analysis
-        results['comparison'] = self.compare_frequency_groups(
-            results['high_freq'], results['low_freq']
-        )
-        
-        # Overall summary
-        results['summary'] = {
-            'high_freq_samples': activations_high_freq.shape[0],
-            'low_freq_samples': activations_low_freq.shape[0],
-            'activation_dimension': activations_high_freq.shape[1],
-            'semantic_category': semantic_category,
-            'analysis_timestamp': pd.Timestamp.now().isoformat() if PANDAS_AVAILABLE else None
-        }
-        
-        return results
-    
-    def generate_analysis_report(self, results: Dict[str, Any]) -> str:
-        """
-        Generate human-readable analysis report.
-        
-        Args:
-            results: Analysis results from analyze_polytope_superposition
-            
-        Returns:
-            Formatted analysis report string
-        """
-        report = []
-        report.append("=" * 80)
-        report.append("SUPERPOSITION ANALYSIS REPORT")
-        report.append("=" * 80)
-        
-        if 'summary' in results:
-            summary = results['summary']
-            report.append(f"Analysis Category: {summary.get('semantic_category', 'Unknown')}")
-            report.append(f"High Freq Samples: {summary.get('high_freq_samples', 'Unknown')}")
-            report.append(f"Low Freq Samples: {summary.get('low_freq_samples', 'Unknown')}")
-            report.append(f"Activation Dimension: {summary.get('activation_dimension', 'Unknown')}")
-            report.append("")
-        
-        # High frequency results
-        hf = results['high_freq']
-        report.append("HIGH FREQUENCY N-GRAMS:")
-        report.append(f"  • Unique Patterns: {hf['n_unique_patterns']}")
-        report.append(f"  • Compression Ratio: {hf['compression_ratio']:.3f}")
-        report.append(f"  • Mean Polytope Density: {hf['mean_density']:.4f}")
-        if 'participation_ratio' in hf:
-            report.append(f"  • Participation Ratio: {hf['participation_ratio']:.2f}")
-        report.append(f"  • Mean Squared Overlap (sampled): {hf['interference_per_dimension']:.4f}")
-        report.append(f"  • Phase Classification: {hf['phase_classification']}")
-        report.append(f"  • Cluster Consistency: {hf['cluster_consistency']:.3f}")
-        report.append("")
-        
-        # Low frequency results
-        lf = results['low_freq']
-        report.append("LOW FREQUENCY N-GRAMS:")
-        report.append(f"  • Unique Patterns: {lf['n_unique_patterns']}")
-        report.append(f"  • Compression Ratio: {lf['compression_ratio']:.3f}")
-        report.append(f"  • Mean Polytope Density: {lf['mean_density']:.4f}")
-        if 'participation_ratio' in lf:
-            report.append(f"  • Participation Ratio: {lf['participation_ratio']:.2f}")
-        report.append(f"  • Mean Squared Overlap (sampled): {lf['interference_per_dimension']:.4f}")
-        report.append(f"  • Phase Classification: {lf['phase_classification']}")
-        report.append(f"  • Cluster Consistency: {lf['cluster_consistency']:.3f}")
-        report.append("")
-        
-        # Comparative analysis
-        comp = results['comparison']
-        report.append("COMPARATIVE ANALYSIS:")
-        report.append(f"  • Superposition Strength Difference: {comp['superposition_strength_difference']:.4f}")
-        report.append(f"  • Density Ratio (H/L): {comp['mean_density_ratio']:.3f}")
-        if 'interference_per_dimension_ratio' in comp:
-            report.append(f"  • Interference Ratio (H/L): {comp['interference_per_dimension_ratio']:.3f}")
-        report.append(f"  • Phase Transition: {comp['phase_transition']}")
-        report.append("")
-        
-        report.append("=" * 80)
-        return "\n".join(report)
-
-
 class MultiCheckpointPolytopeAnalyzer:
     """
-    Comprehensive multi-checkpoint polytope analysis for studying evolution
-    of high/low frequency patterns across model training checkpoints and layers.
+    Simplified multi-checkpoint polytope analysis for studying 
+    high/low frequency patterns across model training checkpoints.
     """
     
-    def __init__(self, min_cluster_size: int = 5, random_seed: Optional[int] = 42):
-        self.base_analyzer = SuperpositionAnalyzer(min_cluster_size, random_seed)
+    def __init__(self, random_seed: Optional[int] = 42):
+        self.base_analyzer = SuperpositionAnalyzer(random_seed)
         self.random_seed = random_seed
         if random_seed is not None:
             np.random.seed(random_seed)
@@ -991,6 +984,25 @@ class MultiCheckpointPolytopeAnalyzer:
         """Load checkpoint analysis results from file"""
         with open(checkpoint_file, 'rb') as f:
             data = pickle.load(f)
+        # Normalize frequency category field for downstream grouping
+        try:
+            records = data['records'] if isinstance(data, dict) and 'records' in data else data
+            for r in records:
+                raw_cat = r.get('category', None)
+                if not raw_cat or raw_cat == 'unknown':
+                    raw_cat = r.get('frequency_category', r.get('frequencyCategory', None))
+                if isinstance(raw_cat, str) and raw_cat:
+                    norm = raw_cat.strip().lower()
+                    if norm in {'high_frequency', 'highfreq', 'high-freq', 'high'}:
+                        r['category'] = 'high_freq'
+                    elif norm in {'low_frequency', 'lowfreq', 'low-freq', 'low'}:
+                        r['category'] = 'low_freq'
+                    elif norm in {'medium_frequency', 'mid_frequency', 'mid', 'medium'}:
+                        r['category'] = 'mid_freq'
+                    else:
+                        r['category'] = raw_cat
+        except Exception:
+            pass
         return data
     
     def organize_records_by_attributes(self, records: List[Dict[str, Any]]) -> Dict[str, Dict[str, List]]:
@@ -1000,7 +1012,16 @@ class MultiCheckpointPolytopeAnalyzer:
         for record in records:
             checkpoint = record['checkpoint_step']
             layer = record['layer']
-            category = record['category']
+            raw_cat = record.get('category', record.get('frequency_category', 'unknown'))
+            norm = str(raw_cat).strip().lower()
+            if norm in {'high_frequency', 'highfreq', 'high-freq', 'high'}:
+                category = 'high_freq'
+            elif norm in {'low_frequency', 'lowfreq', 'low-freq', 'low'}:
+                category = 'low_freq'
+            elif norm in {'medium_frequency', 'mid_frequency', 'mid', 'medium'}:
+                category = 'mid_freq'
+            else:
+                category = raw_cat
             organized[checkpoint][layer][category].append(record)
         
         return dict(organized)
@@ -1029,6 +1050,13 @@ class MultiCheckpointPolytopeAnalyzer:
             return np.stack(codes_list)
         except Exception:
             return None
+
+    def strict_extract_spline_codes(self, records: List[Dict[str, Any]]) -> np.ndarray:
+        """Strictly extract spline codes; raise if any record is missing codes."""
+        codes = self.extract_spline_codes_from_records(records)
+        if codes is None:
+            raise ValueError("Strict analysis requires 'spline_code' present for all records.")
+        return codes
     
     def analyze_checkpoint_layer_comparison(self, 
                                           high_freq_records: List[Dict[str, Any]], 
@@ -1043,9 +1071,9 @@ class MultiCheckpointPolytopeAnalyzer:
         # Extract activation matrices
         high_activations, high_patterns = self.extract_activation_matrices(high_freq_records)
         low_activations, low_patterns = self.extract_activation_matrices(low_freq_records)
-        # Optional spline codes if available in records
-        high_codes = self.extract_spline_codes_from_records(high_freq_records)
-        low_codes = self.extract_spline_codes_from_records(low_freq_records)
+        # Strict spline codes from records
+        high_codes = self.strict_extract_spline_codes(high_freq_records)
+        low_codes = self.strict_extract_spline_codes(low_freq_records)
         
         # Run base polytope analysis
         results = self.base_analyzer.analyze_polytope_superposition(
@@ -1064,340 +1092,13 @@ class MultiCheckpointPolytopeAnalyzer:
             'layer': layer,
             'n_high_freq_samples': len(high_freq_records),
             'n_low_freq_samples': len(low_freq_records),
-            'high_freq_ngrams': list(set(r['ngram'] for r in high_freq_records)),
-            'low_freq_ngrams': list(set(r['ngram'] for r in low_freq_records))
+            'high_freq_phrases': list(set(r.get('phrase', r.get('phrase')) for r in high_freq_records)),
+            'low_freq_phrases': list(set(r.get('phrase', r.get('phrase')) for r in low_freq_records))
         }
         
         return results
     
-    def run_comprehensive_analysis(self, checkpoint_file: str) -> Dict[str, Any]:
-        """Run comprehensive analysis across all checkpoints and layers"""
-        
-        # Load data
-        data = self.load_checkpoint_data(checkpoint_file)
-        records = data['records']
-        metadata = data['metadata']
-        
-        print(f"Loaded {len(records)} records from {len(metadata['checkpoints'])} checkpoints")
-        print(f"Target layers: {metadata['target_layers']}")
-        
-        # Organize records
-        organized = self.organize_records_by_attributes(records)
-        
-        # Run analysis for each checkpoint-layer combination
-        results = {}
-        total_combinations = 0
-        successful_analyses = 0
-        
-        for checkpoint in organized:
-            results[checkpoint] = {}
-            for layer in organized[checkpoint]:
-                layer_data = organized[checkpoint][layer]
-                
-                # Check if we have both high and low frequency data
-                # Support both naming conventions
-                high_freq = layer_data.get('high_freq', layer_data.get('high', []))
-                low_freq = layer_data.get('low_freq', layer_data.get('low', []))
-                
-                total_combinations += 1
-                
-                if high_freq and low_freq:
-                    print(f"Analyzing checkpoint {checkpoint}, layer {layer}: {len(high_freq)} high freq, {len(low_freq)} low freq")
-                    
-                    analysis_result = self.analyze_checkpoint_layer_comparison(
-                        high_freq, low_freq, checkpoint, layer
-                    )
-                    
-                    results[checkpoint][layer] = analysis_result
-                    successful_analyses += 1
-                else:
-                    print(f"Skipping checkpoint {checkpoint}, layer {layer}: insufficient data")
-                    results[checkpoint][layer] = {
-                        'error': 'Insufficient frequency category data',
-                        'high_freq_count': len(high_freq),
-                        'low_freq_count': len(low_freq)
-                    }
-        
-        print(f"Completed {successful_analyses}/{total_combinations} analyses")
-        
-        # Compile comprehensive results
-        comprehensive_results = {
-            'individual_analyses': results,
-            'metadata': metadata,
-            'summary_statistics': self.compute_cross_checkpoint_statistics(results),
-            'evolution_patterns': self.analyze_evolution_patterns(results)
-        }
-        
-        return comprehensive_results
-    
-    def compute_cross_checkpoint_statistics(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Compute statistics across checkpoints and layers"""
-        
-        stats = {
-            'superposition_evolution': defaultdict(list),
-            'polytope_density_evolution': defaultdict(list),
-            'layer_differences': defaultdict(list),
-            'checkpoint_progression': defaultdict(list)
-        }
-        
-        for checkpoint, checkpoint_data in results.items():
-            if not isinstance(checkpoint_data, dict):
-                continue
-                
-            for layer, layer_data in checkpoint_data.items():
-                if isinstance(layer_data, dict) and 'comparison' in layer_data:
-                    comparison = layer_data['comparison']
-                    
-                    # Track superposition strength evolution
-                    if 'superposition_strength_difference' in comparison:
-                        stats['superposition_evolution'][layer].append({
-                            'checkpoint': checkpoint,
-                            'superposition_diff': comparison['superposition_strength_difference']
-                        })
-                    
-                    # Track polytope density evolution
-                    if 'mean_density_ratio' in comparison:
-                        stats['polytope_density_evolution'][layer].append({
-                            'checkpoint': checkpoint,
-                            'density_ratio': comparison['mean_density_ratio']
-                        })
-        
-        return dict(stats)
-    
-    def analyze_evolution_patterns(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze how polytope characteristics evolve during training"""
-        
-        patterns = {
-            'layer_convergence': {},
-            'training_dynamics': {},
-            'frequency_separation': {}
-        }
-        
-        # Analyze layer-wise convergence patterns
-        for checkpoint, checkpoint_data in results.items():
-            if not isinstance(checkpoint_data, dict):
-                continue
-                
-            layer_metrics = {}
-            for layer, layer_data in checkpoint_data.items():
-                if isinstance(layer_data, dict) and 'comparison' in layer_data:
-                    layer_metrics[layer] = {
-                        'superposition_diff': layer_data['comparison'].get('superposition_strength_difference', 0),
-                        'density_ratio': layer_data['comparison'].get('mean_density_ratio', 1.0),
-                        'phase_transition': layer_data['comparison'].get('phase_transition', 'unknown')
-                    }
-            
-            if layer_metrics:
-                patterns['training_dynamics'][checkpoint] = layer_metrics
-        
-        return patterns
-    
-    def generate_evolution_visualizations(self, results: Dict[str, Any], output_dir: str = "cache/polytope_evolution"):
-        """Generate comprehensive visualizations of polytope evolution"""
-        
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        # Extract data for visualization
-        evolution_data = []
-        
-        for checkpoint, checkpoint_data in results['individual_analyses'].items():
-            if not isinstance(checkpoint_data, dict):
-                continue
-                
-            for layer, layer_data in checkpoint_data.items():
-                if isinstance(layer_data, dict) and 'comparison' in layer_data:
-                    comparison = layer_data['comparison']
-                    evolution_data.append({
-                        'checkpoint': int(checkpoint),
-                        'layer': int(layer),
-                        'superposition_diff': comparison.get('superposition_strength_difference', 0),
-                        'density_ratio': comparison.get('mean_density_ratio', 1.0),
-                        'interference_ratio': comparison.get('interference_per_dimension_ratio', 1.0),
-                        'phase_transition': comparison.get('phase_transition', 'unknown')
-                    })
-        
-        if not evolution_data:
-            print("No data available for visualization")
-            return
-        
-        df = pd.DataFrame(evolution_data)
-        
-        # Create evolution heatmaps
-        plt.style.use('default')
-        
-        # 1. Superposition strength evolution
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-        
-        # Superposition difference heatmap
-        pivot_sup = df.pivot(index='layer', columns='checkpoint', values='superposition_diff')
-        sns.heatmap(pivot_sup, annot=True, cmap='RdBu_r', center=0, ax=ax1)
-        ax1.set_title('Superposition Strength Difference\n(High Freq - Low Freq)')
-        ax1.set_xlabel('Checkpoint Step')
-        ax1.set_ylabel('Layer')
-        
-        # Density ratio heatmap
-        pivot_density = df.pivot(index='layer', columns='checkpoint', values='density_ratio')
-        sns.heatmap(pivot_density, annot=True, cmap='viridis', ax=ax2)
-        ax2.set_title('Polytope Density Ratio\n(High Freq / Low Freq)')
-        ax2.set_xlabel('Checkpoint Step')
-        ax2.set_ylabel('Layer')
-        
-        # Interference ratio heatmap
-        pivot_interference = df.pivot(index='layer', columns='checkpoint', values='interference_ratio')
-        sns.heatmap(pivot_interference, annot=True, cmap='plasma', ax=ax3)
-        ax3.set_title('Interference Ratio\n(High Freq / Low Freq)')
-        ax3.set_xlabel('Checkpoint Step')
-        ax3.set_ylabel('Layer')
-        
-        plt.tight_layout()
-        plt.savefig(output_path / 'polytope_evolution_heatmaps.png', dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # 2. Evolution line plots
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
-        
-        # Superposition evolution by layer
-        for layer in df['layer'].unique():
-            layer_data = df[df['layer'] == layer]
-            ax1.plot(layer_data['checkpoint'], layer_data['superposition_diff'], 
-                    marker='o', label=f'Layer {layer}', linewidth=2)
-        ax1.set_xlabel('Checkpoint Step')
-        ax1.set_ylabel('Superposition Strength Difference')
-        ax1.set_title('Superposition Evolution by Layer')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # Density ratio evolution by layer
-        for layer in df['layer'].unique():
-            layer_data = df[df['layer'] == layer]
-            ax2.plot(layer_data['checkpoint'], layer_data['density_ratio'], 
-                    marker='s', label=f'Layer {layer}', linewidth=2)
-        ax2.set_xlabel('Checkpoint Step')
-        ax2.set_ylabel('Density Ratio (High/Low)')
-        ax2.set_title('Polytope Density Evolution by Layer')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        # Layer progression at different checkpoints
-        checkpoints_to_show = sorted(df['checkpoint'].unique())[::2]  # Show every other checkpoint
-        for checkpoint in checkpoints_to_show:
-            checkpoint_data = df[df['checkpoint'] == checkpoint]
-            ax3.plot(checkpoint_data['layer'], checkpoint_data['superposition_diff'], 
-                    marker='o', label=f'Step {checkpoint}', linewidth=2)
-        ax3.set_xlabel('Layer')
-        ax3.set_ylabel('Superposition Strength Difference')
-        ax3.set_title('Layer Progression at Different Checkpoints')
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-        
-        # Scatter plot: Density vs Superposition
-        scatter = ax4.scatter(df['density_ratio'], df['superposition_diff'], 
-                             c=df['checkpoint'], cmap='viridis', 
-                             s=60, alpha=0.7, edgecolors='black', linewidth=0.5)
-        ax4.set_xlabel('Density Ratio (High/Low)')
-        ax4.set_ylabel('Superposition Strength Difference')
-        ax4.set_title('Density vs Superposition Relationship')
-        ax4.grid(True, alpha=0.3)
-        
-        # Add colorbar for checkpoint steps
-        cbar = plt.colorbar(scatter, ax=ax4)
-        cbar.set_label('Checkpoint Step')
-        
-        plt.tight_layout()
-        plt.savefig(output_path / 'polytope_evolution_trends.png', dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print(f"Evolution visualizations saved to {output_path}")
-    
-    def generate_comprehensive_report(self, results: Dict[str, Any]) -> str:
-        """Generate comprehensive analysis report"""
-        
-        report = []
-        report.append("=" * 100)
-        report.append("MULTI-CHECKPOINT POLYTOPE SUPERPOSITION ANALYSIS REPORT")
-        report.append("=" * 100)
-        report.append("")
-        
-        metadata = results.get('metadata', {})
-        report.append(f"Model: {metadata.get('model_name', 'Unknown')}")
-        report.append(f"Checkpoints analyzed: {len(metadata.get('checkpoints', []))}")
-        report.append(f"Layers analyzed: {metadata.get('target_layers', [])}")
-        report.append(f"Total records: {metadata.get('n_total_records', 0):,}")
-        report.append("")
-        
-        # Summary statistics
-        summary_stats = results.get('summary_statistics', {})
-        if summary_stats:
-            report.append("EVOLUTION SUMMARY:")
-            report.append("-" * 50)
-            
-            # Analyze superposition evolution trends
-            sup_evolution = summary_stats.get('superposition_evolution', {})
-            for layer, layer_data in sup_evolution.items():
-                if layer_data:
-                    values = [d['superposition_diff'] for d in layer_data]
-                    report.append(f"Layer {layer}:")
-                    report.append(f"  • Superposition range: [{min(values):.3f}, {max(values):.3f}]")
-                    report.append(f"  • Mean evolution: {np.mean(values):.3f} ± {np.std(values):.3f}")
-            report.append("")
-        
-        # Evolution patterns
-        evolution_patterns = results.get('evolution_patterns', {})
-        if evolution_patterns:
-            report.append("TRAINING DYNAMICS:")
-            report.append("-" * 50)
-            
-            training_dynamics = evolution_patterns.get('training_dynamics', {})
-            checkpoints = sorted([int(k) for k in training_dynamics.keys()])
-            
-            for checkpoint in checkpoints[:5]:  # Show first 5 checkpoints
-                checkpoint_str = str(checkpoint)
-                if checkpoint_str in training_dynamics:
-                    data = training_dynamics[checkpoint_str]
-                    report.append(f"Checkpoint {checkpoint}:")
-                    
-                    for layer, metrics in data.items():
-                        report.append(f"  Layer {layer}: sup_diff={metrics['superposition_diff']:.3f}, "
-                                    f"density_ratio={metrics['density_ratio']:.3f}")
-                    report.append("")
-        
-        # Individual analysis highlights
-        report.append("CHECKPOINT-LAYER ANALYSIS HIGHLIGHTS:")
-        report.append("-" * 50)
-        
-        individual_analyses = results.get('individual_analyses', {})
-        highlight_count = 0
-        
-        for checkpoint, checkpoint_data in individual_analyses.items():
-            if not isinstance(checkpoint_data, dict) or highlight_count >= 10:
-                continue
-                
-            for layer, layer_data in checkpoint_data.items():
-                if isinstance(layer_data, dict) and 'comparison' in layer_data:
-                    comparison = layer_data['comparison']
-                    
-                    # Highlight interesting cases
-                    sup_diff = comparison.get('superposition_strength_difference', 0)
-                    if abs(sup_diff) > 0.1:  # Significant superposition difference
-                        report.append(f"Checkpoint {checkpoint}, Layer {layer}:")
-                        report.append(f"  • Strong frequency effect: {sup_diff:.3f}")
-                        report.append(f"  • Phase: {comparison.get('phase_transition', 'unknown')}")
-                        report.append("")
-                        highlight_count += 1
-                        
-                        if highlight_count >= 10:
-                            break
-        
-        report.append("=" * 100)
-        return "\n".join(report)
-
-
-# -------------------------------
-# Simplified functional pipeline
-# -------------------------------
-from typing import cast  # keep imports localized to minimize top-level noise
-
+  
 
 def _load_checkpoint_data_simple(checkpoint_file: str) -> Dict[str, Any]:
     with open(checkpoint_file, 'rb') as f:
@@ -1427,16 +1128,57 @@ def _load_checkpoint_data_simple(checkpoint_file: str) -> Dict[str, Any]:
             'n_total_records': len(records),
             'format': 'plain_list'
         }
+        # Normalize frequency category labels on records
+        for r in records:
+            raw_cat = r.get('category', None)
+            if not raw_cat or raw_cat == 'unknown':
+                raw_cat = r.get('frequency_category', r.get('frequencyCategory', None))
+            if isinstance(raw_cat, str) and raw_cat:
+                norm = raw_cat.strip().lower()
+                if norm in {'high_frequency', 'highfreq', 'high-freq', 'high'}:
+                    r['category'] = 'high_freq'
+                elif norm in {'low_frequency', 'lowfreq', 'low-freq', 'low'}:
+                    r['category'] = 'low_freq'
+                else:
+                    r['category'] = raw_cat
         data = {'records': records, 'metadata': metadata}
     elif not (isinstance(data, dict) and 'records' in data and 'metadata' in data):
         raise ValueError("Checkpoint file must be a list of records or a dict with 'records' and 'metadata'")
+    else:
+        # Normalize categories in dict form as well
+        try:
+            for r in data['records']:
+                raw_cat = r.get('category', None)
+                if not raw_cat or raw_cat == 'unknown':
+                    raw_cat = r.get('frequency_category', r.get('frequencyCategory', None))
+                if isinstance(raw_cat, str) and raw_cat:
+                    norm = raw_cat.strip().lower()
+                    if norm in {'high_frequency', 'highfreq', 'high-freq', 'high'}:
+                        r['category'] = 'high_freq'
+                    elif norm in {'low_frequency', 'lowfreq', 'low-freq', 'low'}:
+                        r['category'] = 'low_freq'
+                    else:
+                        r['category'] = raw_cat
+        except Exception:
+            pass
     return cast(Dict[str, Any], data)
 
 
 def _organize_records(records: List[Dict[str, Any]]) -> Dict[str, Dict[str, Dict[str, List[Dict[str, Any]]]]]:
     organized: Dict[str, Dict[str, Dict[str, List[Dict[str, Any]]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     for r in records:
-        organized[str(r['checkpoint_step'])][str(r['layer'])][r.get('category', 'unknown')].append(r)
+        # Map various frequency labels into canonical keys used downstream
+        raw_cat = r.get('category', r.get('frequency_category', 'unknown'))
+        norm = str(raw_cat).strip().lower()
+        if norm in {'high_frequency', 'highfreq', 'high-freq', 'high'}:
+            cat = 'high_freq'
+        elif norm in {'low_frequency', 'lowfreq', 'low-freq', 'low'}:
+            cat = 'low_freq'
+        elif norm in {'medium_frequency', 'mid_frequency', 'mid', 'medium'}:
+            cat = 'mid_freq'
+        else:
+            cat = raw_cat
+        organized[str(r['checkpoint_step'])][str(r['layer'])][cat].append(r)
     return dict(organized)
 
 
@@ -1449,365 +1191,89 @@ def _extract_matrices(records: List[Dict[str, Any]]) -> Tuple[np.ndarray, np.nda
 
 
 def _compute_cross_checkpoint_statistics(results: Dict[str, Any]) -> Dict[str, Any]:
-    stats = {
-        'superposition_evolution': defaultdict(list),
-        'polytope_density_evolution': defaultdict(list),
-        'layer_differences': defaultdict(list),
-        'checkpoint_progression': defaultdict(list),
+    """Compute simple summary statistics across checkpoints"""
+    summary = {
+        'total_comparisons': 0,
+        'mean_superposition_difference': 0.0,
+        'mean_density_ratio': 0.0,
+        'successful_analyses': 0
     }
+    
+    superposition_diffs = []
+    density_ratios = []
+    
     for checkpoint, ckpt_data in results.items():
         if not isinstance(ckpt_data, dict):
             continue
         for layer, layer_data in ckpt_data.items():
             if isinstance(layer_data, dict) and 'comparison' in layer_data:
                 comp = layer_data['comparison']
+                summary['total_comparisons'] += 1
+                summary['successful_analyses'] += 1
+                
                 if 'superposition_strength_difference' in comp:
-                    stats['superposition_evolution'][layer].append({'checkpoint': checkpoint, 'superposition_diff': comp['superposition_strength_difference']})
+                    superposition_diffs.append(comp['superposition_strength_difference'])
+                
                 if 'mean_density_ratio' in comp:
-                    stats['polytope_density_evolution'][layer].append({'checkpoint': checkpoint, 'density_ratio': comp['mean_density_ratio']})
-    return dict(stats)
+                    density_ratios.append(comp['mean_density_ratio'])
+    
+    if superposition_diffs:
+        summary['mean_superposition_difference'] = float(np.mean(superposition_diffs))
+        summary['std_superposition_difference'] = float(np.std(superposition_diffs))
+    
+    if density_ratios:
+        summary['mean_density_ratio'] = float(np.mean(density_ratios))
+        summary['std_density_ratio'] = float(np.std(density_ratios))
+    
+    return summary
 
 
 def _analyze_evolution_patterns(results: Dict[str, Any]) -> Dict[str, Any]:
-    patterns = {'layer_convergence': {}, 'training_dynamics': {}, 'frequency_separation': {}}
+    """Simple analysis of patterns across checkpoints"""
+    patterns = {
+        'strongest_effects': [],
+        'weak_effects': [],
+        'phase_transitions': {}
+    }
+    
+    # Find strongest and weakest effects
     for checkpoint, ckpt_data in results.items():
         if not isinstance(ckpt_data, dict):
             continue
-        layer_metrics = {}
+            
         for layer, layer_data in ckpt_data.items():
             if isinstance(layer_data, dict) and 'comparison' in layer_data:
-                layer_metrics[layer] = {
-                    'superposition_diff': layer_data['comparison'].get('superposition_strength_difference', 0),
-                    'density_ratio': layer_data['comparison'].get('mean_density_ratio', 1.0),
-                    'phase_transition': layer_data['comparison'].get('phase_transition', 'unknown'),
+                comparison = layer_data['comparison']
+                superposition_diff = abs(comparison.get('superposition_strength_difference', 0))
+                
+                effect_info = {
+                    'checkpoint': checkpoint,
+                    'layer': layer,
+                    'superposition_diff': superposition_diff,
+                    'phase_transition': comparison.get('phase_transition', 'unknown')
                 }
-        if layer_metrics:
-            patterns['training_dynamics'][checkpoint] = layer_metrics
+                
+                if superposition_diff > 0.1:  # Strong effect threshold
+                    patterns['strongest_effects'].append(effect_info)
+                elif superposition_diff < 0.05:  # Weak effect threshold
+                    patterns['weak_effects'].append(effect_info)
+                
+                # Track phase transitions
+                phase = comparison.get('phase_transition', 'unknown')
+                if phase not in patterns['phase_transitions']:
+                    patterns['phase_transitions'][phase] = 0
+                patterns['phase_transitions'][phase] += 1
+    
+    # Sort by effect strength
+    patterns['strongest_effects'].sort(key=lambda x: x['superposition_diff'], reverse=True)
+    patterns['weak_effects'].sort(key=lambda x: x['superposition_diff'])
+    
     return patterns
-
-
-def _generate_visualizations(results: Dict[str, Any], output_dir: str = "cache/polytope_evolution") -> None:
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    evolution_data: List[Dict[str, Any]] = []
-    for checkpoint, ckpt_data in results['individual_analyses'].items():
-        if not isinstance(ckpt_data, dict):
-            continue
-        for layer, layer_data in ckpt_data.items():
-            if isinstance(layer_data, dict) and 'comparison' in layer_data:
-                comp = layer_data['comparison']
-                evolution_data.append({
-                    'checkpoint': int(checkpoint) if str(checkpoint).isdigit() else checkpoint,
-                    'layer': int(layer) if str(layer).isdigit() else layer,
-                    'superposition_diff': comp.get('superposition_strength_difference', 0),
-                    'density_ratio': comp.get('mean_density_ratio', 1.0),
-                    'interference_ratio': comp.get('interference_per_dimension_ratio', 1.0),
-                    'phase_transition': comp.get('phase_transition', 'unknown'),
-                })
-    if not evolution_data:
-        print("No data available for visualization")
-        return
-    df = pd.DataFrame(evolution_data)
-    plt.style.use('default')
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-    try:
-        pivot_sup = df.pivot(index='layer', columns='checkpoint', values='superposition_diff')
-        sns.heatmap(pivot_sup, annot=pivot_sup.size <= 200, cmap='RdBu_r', center=0, ax=ax1)
-    except Exception:
-        ax1.text(0.5, 0.5, 'Heatmap unavailable', ha='center')
-    ax1.set_title('Superposition Strength Difference\n(High Freq - Low Freq)')
-    ax1.set_xlabel('Checkpoint Step')
-    ax1.set_ylabel('Layer')
-    try:
-        pivot_density = df.pivot(index='layer', columns='checkpoint', values='density_ratio')
-        sns.heatmap(pivot_density, annot=pivot_density.size <= 200, cmap='viridis', ax=ax2)
-    except Exception:
-        ax2.text(0.5, 0.5, 'Heatmap unavailable', ha='center')
-    ax2.set_title('Polytope Density Ratio\n(High Freq / Low Freq)')
-    ax2.set_xlabel('Checkpoint Step')
-    ax2.set_ylabel('Layer')
-    try:
-        pivot_interference = df.pivot(index='layer', columns='checkpoint', values='interference_ratio')
-        sns.heatmap(pivot_interference, annot=pivot_interference.size <= 200, cmap='plasma', ax=ax3)
-    except Exception:
-        ax3.text(0.5, 0.5, 'Heatmap unavailable', ha='center')
-    ax3.set_title('Interference Ratio\n(High Freq / Low Freq)')
-    ax3.set_xlabel('Checkpoint Step')
-    ax3.set_ylabel('Layer')
-    plt.tight_layout()
-    plt.savefig(output_path / 'polytope_evolution_heatmaps.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
-    for layer in df['layer'].unique():
-        layer_data = df[df['layer'] == layer]
-        ax1.plot(layer_data['checkpoint'], layer_data['superposition_diff'], marker='o', label=f'Layer {layer}', linewidth=2)
-    ax1.set_xlabel('Checkpoint Step')
-    ax1.set_ylabel('Superposition Strength Difference')
-    ax1.set_title('Superposition Evolution by Layer')
-    handles, labels = ax1.get_legend_handles_labels()
-    if handles and any(labels):
-        ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    for layer in df['layer'].unique():
-        layer_data = df[df['layer'] == layer]
-        ax2.plot(layer_data['checkpoint'], layer_data['density_ratio'], marker='s', label=f'Layer {layer}', linewidth=2)
-    ax2.set_xlabel('Checkpoint Step')
-    ax2.set_ylabel('Density Ratio (High/Low)')
-    ax2.set_title('Polytope Density Evolution by Layer')
-    handles, labels = ax2.get_legend_handles_labels()
-    if handles and any(labels):
-        ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    try:
-        checkpoints_to_show = sorted([c for c in df['checkpoint'].unique() if isinstance(c, (int, float))])[::2]
-    except Exception:
-        checkpoints_to_show = []
-    for checkpoint in checkpoints_to_show:
-        checkpoint_data = df[df['checkpoint'] == checkpoint]
-        ax3.plot(checkpoint_data['layer'], checkpoint_data['superposition_diff'], marker='o', label=f'Step {checkpoint}', linewidth=2)
-    ax3.set_xlabel('Layer')
-    ax3.set_ylabel('Superposition Strength Difference')
-    ax3.set_title('Layer Progression at Different Checkpoints')
-    handles, labels = ax3.get_legend_handles_labels()
-    if handles and any(labels):
-        ax3.legend()
-    ax3.grid(True, alpha=0.3)
-    scatter = ax4.scatter(df['density_ratio'], df['superposition_diff'], c=pd.factorize(df['checkpoint'])[0], cmap='viridis', s=60, alpha=0.7, edgecolors='black', linewidth=0.5)
-    ax4.set_xlabel('Density Ratio (High/Low)')
-    ax4.set_ylabel('Superposition Strength Difference')
-    ax4.set_title('Density vs Superposition Relationship')
-    ax4.grid(True, alpha=0.3)
-    cbar = plt.colorbar(scatter, ax=ax4)
-    cbar.set_label('Checkpoint (encoded)')
-    plt.tight_layout()
-    plt.savefig(output_path / 'polytope_evolution_trends.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Evolution visualizations saved to {output_path}")
-
-
-def _collect_publication_dfs(results: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Build tidy DataFrames for publication-quality figures.
-    Returns:
-      - timeseries_df: rows per checkpoint-layer-group with key metrics
-      - densities_df: rows per sampled density value with checkpoint, layer, group
-    """
-    records_ts: List[Dict[str, Any]] = []
-    records_den: List[Dict[str, Any]] = []
-    rng = np.random.default_rng(42)
-    for checkpoint, ckpt_data in results['individual_analyses'].items():
-        if not isinstance(ckpt_data, dict):
-            continue
-        for layer, layer_data in ckpt_data.items():
-            if not (isinstance(layer_data, dict) and 'high_freq' in layer_data and 'low_freq' in layer_data):
-                continue
-            for group_key, group_name in [('high_freq', 'high'), ('low_freq', 'low')]:
-                g = layer_data[group_key]
-                if not isinstance(g, dict):
-                    continue
-                record = {
-                    'checkpoint': int(checkpoint) if str(checkpoint).isdigit() else checkpoint,
-                    'layer': int(layer) if str(layer).isdigit() else layer,
-                    'group': group_name,
-                    'mean_density': g.get('mean_density', np.nan),
-                    'participation_ratio': g.get('participation_ratio', np.nan),
-                    'interference_per_dimension': g.get('interference_per_dimension', np.nan),
-                    'n_samples': int(g.get('binary_patterns').shape[0]) if 'binary_patterns' in g else np.nan,
-                }
-                records_ts.append(record)
-                # Densities: sample up to 1000 values to control size
-                dens = g.get('polytope_densities', None)
-                if dens is not None and len(dens) > 0:
-                    sample_size = min(1000, len(dens))
-                    if len(dens) > sample_size:
-                        idx = rng.choice(len(dens), size=sample_size, replace=False)
-                        dens_sample = np.asarray(dens)[idx]
-                    else:
-                        dens_sample = np.asarray(dens)
-                    for v in dens_sample:
-                        records_den.append({
-                            'checkpoint': record['checkpoint'],
-                            'layer': record['layer'],
-                            'group': group_name,
-                            'density': float(v),
-                        })
-    timeseries_df = pd.DataFrame.from_records(records_ts) if records_ts else pd.DataFrame()
-    densities_df = pd.DataFrame.from_records(records_den) if records_den else pd.DataFrame()
-    return timeseries_df, densities_df
-
-
-def _generate_publication_figures(results: Dict[str, Any], output_dir: str = "cache/polytope_evolution") -> None:
-    """Create clearer, publication-ready visualizations comparing high vs low and their evolution."""
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    ts_df, den_df = _collect_publication_dfs(results)
-    if ts_df.empty:
-        print("No data available to generate publication figures")
-        return
-
-    # Figure A: Differences over time (High - Low) per layer for key metrics
-    # Build diffs by merging high and low rows
-    hf = ts_df[ts_df['group'] == 'high'].rename(columns={
-        'mean_density': 'mean_density_high',
-        'participation_ratio': 'participation_ratio_high',
-        'interference_per_dimension': 'interference_high'
-    })
-    lf = ts_df[ts_df['group'] == 'low'].rename(columns={
-        'mean_density': 'mean_density_low',
-        'participation_ratio': 'participation_ratio_low',
-        'interference_per_dimension': 'interference_low'
-    })
-    merge_keys = ['checkpoint', 'layer']
-    diff_df = pd.merge(hf[merge_keys + ['mean_density_high', 'participation_ratio_high', 'interference_high']],
-                       lf[merge_keys + ['mean_density_low', 'participation_ratio_low', 'interference_low']],
-                       on=merge_keys, how='inner')
-    if not diff_df.empty:
-        diff_df['density_diff'] = diff_df['mean_density_high'] - diff_df['mean_density_low']
-        diff_df['participation_ratio_diff'] = diff_df['participation_ratio_high'] - diff_df['participation_ratio_low']
-        diff_df['interference_diff'] = diff_df['interference_high'] - diff_df['interference_low']
-        # Plot
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharex=True)
-        for layer in sorted(diff_df['layer'].unique(), key=lambda x: int(x) if str(x).isdigit() else x):
-            d = diff_df[diff_df['layer'] == layer].sort_values('checkpoint')
-            axes[0].plot(d['checkpoint'], d['density_diff'], label=f'Layer {layer}', linewidth=2)
-            axes[1].plot(d['checkpoint'], d['participation_ratio_diff'], label=f'Layer {layer}', linewidth=2)
-            axes[2].plot(d['checkpoint'], d['interference_diff'], label=f'Layer {layer}', linewidth=2)
-        axes[0].axhline(0, color='gray', linestyle='--', linewidth=1)
-        axes[1].axhline(0, color='gray', linestyle='--', linewidth=1)
-        axes[2].axhline(0, color='gray', linestyle='--', linewidth=1)
-        axes[0].set_title('Polytope Density (High - Low)')
-        axes[1].set_title('Participation Ratio (High - Low)')
-        axes[2].set_title('Mean Squared Overlap (High - Low)')
-        for ax in axes:
-            ax.set_xlabel('Checkpoint')
-            ax.grid(True, alpha=0.3)
-        axes[0].set_ylabel('Difference')
-        axes[0].legend(ncol=2, fontsize=8)
-        plt.tight_layout()
-        plt.savefig(out / 'metrics_differences_over_time.png', dpi=300, bbox_inches='tight')
-        plt.close()
-
-    # Figure B: Distribution of polytope densities at selected checkpoints (first, middle, last)
-    if not den_df.empty:
-        # Determine selected checkpoints
-        try:
-            checkpoints_sorted = sorted([c for c in den_df['checkpoint'].unique() if isinstance(c, (int, float))])
-        except Exception:
-            checkpoints_sorted = list(den_df['checkpoint'].unique())
-        if len(checkpoints_sorted) > 0:
-            selected = [checkpoints_sorted[0], checkpoints_sorted[len(checkpoints_sorted)//2], checkpoints_sorted[-1]]
-            fig, axes = plt.subplots(len(selected), 1, figsize=(10, 4 * len(selected)), sharex=True)
-            if len(selected) == 1:
-                axes = [axes]
-            for ax, cp in zip(axes, selected):
-                df_cp = den_df[den_df['checkpoint'] == cp]
-                # Violin plot per layer, colored by group
-                try:
-                    sns.violinplot(data=df_cp, x='layer', y='density', hue='group', split=True, inner='quart', ax=ax)
-                except Exception:
-                    sns.boxplot(data=df_cp, x='layer', y='density', hue='group', ax=ax)
-                ax.set_title(f'Polytope Density Distributions at Checkpoint {cp}')
-                ax.set_xlabel('Layer')
-                ax.set_ylabel('Density (Hamming / Euclidean)')
-                ax.grid(True, axis='y', alpha=0.3)
-            handles, labels = axes[-1].get_legend_handles_labels()
-            axes[-1].legend(handles, labels, title='Group')
-            plt.tight_layout()
-            plt.savefig(out / 'polytope_density_distributions_selected_checkpoints.png', dpi=300, bbox_inches='tight')
-            plt.close()
-
-    # Figure C: High vs Low evolution (means with 95% CI) for each metric aggregated across layers
-    agg = ts_df.copy()
-    # Aggregate by checkpoint and group (across layers)
-    agg_means = agg.groupby(['checkpoint', 'group'], as_index=False)[['mean_density', 'participation_ratio', 'interference_per_dimension']].mean()
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharex=True)
-    for group, color in [('high', '#1f77b4'), ('low', '#d62728')]:
-        g = agg_means[agg_means['group'] == group].sort_values('checkpoint')
-        axes[0].plot(g['checkpoint'], g['mean_density'], label=f'{group}', color=color, linewidth=2)
-        axes[1].plot(g['checkpoint'], g['participation_ratio'], label=f'{group}', color=color, linewidth=2)
-        axes[2].plot(g['checkpoint'], g['interference_per_dimension'], label=f'{group}', color=color, linewidth=2)
-    axes[0].set_title('Mean Polytope Density (Avg across layers)')
-    axes[1].set_title('Participation Ratio (Avg across layers)')
-    axes[2].set_title('Mean Squared Overlap (Avg across layers)')
-    for ax in axes:
-        ax.set_xlabel('Checkpoint')
-        ax.grid(True, alpha=0.3)
-    axes[0].set_ylabel('Value')
-    axes[0].legend(title='Group')
-    plt.tight_layout()
-    plt.savefig(out / 'group_means_over_time.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Publication figures saved to {out}")
-
-
-def _generate_report(results: Dict[str, Any]) -> str:
-    report = []
-    report.append("=" * 100)
-    report.append("MULTI-CHECKPOINT POLYTOPE SUPERPOSITION ANALYSIS REPORT")
-    report.append("=" * 100)
-    report.append("")
-    metadata = results.get('metadata', {})
-    report.append(f"Model: {metadata.get('model_name', 'Unknown')}")
-    report.append(f"Checkpoints analyzed: {len(metadata.get('checkpoints', []))}")
-    report.append(f"Layers analyzed: {metadata.get('target_layers', [])}")
-    report.append(f"Total records: {metadata.get('n_total_records', 0):,}")
-    report.append("")
-    summary_stats = results.get('summary_statistics', {})
-    if summary_stats:
-        report.append("EVOLUTION SUMMARY:")
-        report.append("-" * 50)
-        sup_evolution = summary_stats.get('superposition_evolution', {})
-        for layer, layer_data in sup_evolution.items():
-            if layer_data:
-                values = [d['superposition_diff'] for d in layer_data]
-                report.append(f"Layer {layer}:")
-                report.append(f"  • Superposition range: [{min(values):.3f}, {max(values):.3f}]")
-                report.append(f"  • Mean evolution: {np.mean(values):.3f} ± {np.std(values):.3f}")
-        report.append("")
-    evolution_patterns = results.get('evolution_patterns', {})
-    if evolution_patterns:
-        report.append("TRAINING DYNAMICS:")
-        report.append("-" * 50)
-        training_dynamics = evolution_patterns.get('training_dynamics', {})
-        try:
-            checkpoints = sorted([int(k) for k in training_dynamics.keys()])
-        except Exception:
-            checkpoints = list(training_dynamics.keys())
-        for checkpoint in checkpoints[:5]:
-            checkpoint_str = str(checkpoint)
-            if checkpoint_str in training_dynamics:
-                data = training_dynamics[checkpoint_str]
-                report.append(f"Checkpoint {checkpoint}:")
-                for layer, metrics in data.items():
-                    report.append(f"  Layer {layer}: sup_diff={metrics['superposition_diff']:.3f}, density_ratio={metrics['density_ratio']:.3f}")
-                report.append("")
-    report.append("CHECKPOINT-LAYER ANALYSIS HIGHLIGHTS:")
-    report.append("-" * 50)
-    individual_analyses = results.get('individual_analyses', {})
-    highlight_count = 0
-    for checkpoint, ckpt_data in individual_analyses.items():
-        if not isinstance(ckpt_data, dict) or highlight_count >= 10:
-            continue
-        for layer, layer_data in ckpt_data.items():
-            if isinstance(layer_data, dict) and 'comparison' in layer_data:
-                comp = layer_data['comparison']
-                sup_diff = comp.get('superposition_strength_difference', 0)
-                if abs(sup_diff) > 0.1:
-                    report.append(f"Checkpoint {checkpoint}, Layer {layer}:")
-                    report.append(f"  • Strong frequency effect: {sup_diff:.3f}")
-                    report.append(f"  • Phase: {comp.get('phase_transition', 'unknown')}")
-                    report.append("")
-                    highlight_count += 1
-                    if highlight_count >= 10:
-                        break
-    report.append("=" * 100)
-    return "\n".join(report)
-
 
 def run_polytope_superposition_pipeline(checkpoint_file: str,
                                         output_dir: str = "cache/multi_checkpoint_analysis",
-                                        min_cluster_size: int = 5,
                                         random_seed: Optional[int] = 42) -> Dict[str, Any]:
-    """Singular, function-based pipeline for multi-checkpoint superposition analysis."""
+    """Simplified, function-based pipeline for multi-checkpoint superposition analysis."""
     # Load
     data = _load_checkpoint_data_simple(checkpoint_file)
     records = data['records']
@@ -1819,7 +1285,7 @@ def run_polytope_superposition_pipeline(checkpoint_file: str,
     organized = _organize_records(records)
 
     # Analyzer
-    analyzer = SuperpositionAnalyzer(min_cluster_size=min_cluster_size, random_seed=random_seed)
+    analyzer = SuperpositionAnalyzer(random_seed=random_seed)
 
     # Per combination analysis
     results: Dict[str, Dict[str, Any]] = {}
@@ -1840,20 +1306,26 @@ def run_polytope_superposition_pipeline(checkpoint_file: str,
             print(f"Analyzing checkpoint {checkpoint}, layer {layer}: {len(high)} high freq, {len(low)} low freq")
             high_act, high_bin = _extract_matrices(high)
             low_act, low_bin = _extract_matrices(low)
+            # Strict spline codes
+            high_codes = np.stack([np.asarray(r['spline_code'], dtype=int) for r in high])
+            low_codes = np.stack([np.asarray(r['spline_code'], dtype=int) for r in low])
+
             analysis = analyzer.analyze_polytope_superposition(
                 activations_high_freq=high_act,
                 activations_low_freq=low_act,
                 semantic_category=f"checkpoint_{checkpoint}_layer_{layer}",
-                binary_patterns_high=high_bin,
-                binary_patterns_low=low_bin,
+                binary_patterns_high=high_codes,  # use spline codes as binary patterns strictly
+                binary_patterns_low=low_codes,
+                spline_codes_high=high_codes,
+                spline_codes_low=low_codes,
             )
             analysis['checkpoint_metadata'] = {
                 'checkpoint_step': checkpoint,
                 'layer': layer,
                 'n_high_freq_samples': len(high),
                 'n_low_freq_samples': len(low),
-                'high_freq_ngrams': list(set(r['ngram'] for r in high)),
-                'low_freq_ngrams': list(set(r['ngram'] for r in low)),
+                'high_freq_phrases': list(set(r.get('phrase', r.get('phrase')) for r in high)),
+                'low_freq_phrases': list(set(r.get('phrase', r.get('phrase')) for r in low)),
             }
             results[checkpoint][layer] = analysis
             ok += 1
@@ -1864,22 +1336,38 @@ def run_polytope_superposition_pipeline(checkpoint_file: str,
         'individual_analyses': results,
         'metadata': metadata,
         'summary_statistics': _compute_cross_checkpoint_statistics(results),
-        'evolution_patterns': _analyze_evolution_patterns(results),
+        'patterns': _analyze_evolution_patterns(results),
     }
 
     # Output
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    print("Generating evolution visualizations...")
-    _generate_visualizations(comprehensive, output_dir)
-    print("Generating comprehensive report...")
+    print("Generating simplified visualizations...")
+    _generate_simple_visualizations(comprehensive, output_dir)
+    print("Generating simplified report...")
     report = _generate_report(comprehensive)
-    print("Generating publication figures...")
-    _generate_publication_figures(comprehensive, output_dir)
     with open(output_path / "multi_checkpoint_results.pkl", 'wb') as f:
         pickle.dump(comprehensive, f)
     with open(output_path / "analysis_report.txt", 'w') as f:
         f.write(report)
+    # Also produce spline code → phrase mapping artifacts for the paper
+    try:
+        for ckpt_data in results.values():
+            for layer_data in ckpt_data.values():
+                # If this is an analysis dict, it won't have raw records; fall back to top-level records
+                pass
+        # Use original records for index since analyses don't store raw records
+        save_spline_code_phrase_index(records, output_dir)
+        print("Saved spline-code-to-phrases index artifacts.")
+    except Exception as e:
+        print(f"Warning: could not build spline-code phrase index: {e}")
+    # Build and save bin overlap stats using raw records
+    try:
+        save_bin_polytope_overlap_stats(records, output_dir)
+        print("Saved per-bin polytope overlap statistics.")
+    except Exception as e:
+        print(f"Warning: could not compute bin overlap stats: {e}")
+
     print(f"Analysis complete. Results saved to {output_path}")
     print("\nREPORT PREVIEW:")
     print("=" * 50)
@@ -1892,3 +1380,162 @@ def run_multi_checkpoint_analysis(checkpoint_file: str,
     return run_polytope_superposition_pipeline(checkpoint_file, output_dir)
 
 
+def _hash_code_row(code: np.ndarray) -> str:
+    """Stable hash for a single spline code row (binary array)."""
+    b = np.packbits(code.astype(np.uint8))
+    return hashlib.sha256(b.tobytes()).hexdigest()
+
+
+def build_spline_code_phrase_index(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Map unique spline codes to phrases and frequency bins.
+
+    Returns a dict with entries keyed by code_hash containing:
+      - 'count': number of samples
+      - 'phrases': set/list of phrases
+      - 'bins': counts per bin {'low_freq': c1, 'mid_freq': c2, 'high_freq': c3}
+      - 'layers': set/list of layers observed
+      - 'checkpoints': set/list of checkpoints observed
+    """
+    index: Dict[str, Any] = {}
+    for r in records:
+        code = np.asarray(r['spline_code'], dtype=int)
+        h = _hash_code_row(code)
+        phrase = r.get('phrase', r.get('phrase'))
+        raw_cat = r.get('category', r.get('frequency_category', 'unknown'))
+        norm = str(raw_cat).strip().lower()
+        if norm in {'high_frequency', 'highfreq', 'high-freq', 'high'}:
+            bin_key = 'high_freq'
+        elif norm in {'low_frequency', 'lowfreq', 'low-freq', 'low'}:
+            bin_key = 'low_freq'
+        elif norm in {'medium_frequency', 'mid_frequency', 'mid', 'medium'}:
+            bin_key = 'mid_freq'
+        else:
+            bin_key = norm
+        if h not in index:
+            index[h] = {
+                'count': 0,
+                'phrases': set(),
+                'bins': defaultdict(int),
+                'layers': set(),
+                'checkpoints': set(),
+            }
+        idx = index[h]
+        idx['count'] += 1
+        if phrase is not None:
+            idx['phrases'].add(phrase)
+        idx['bins'][bin_key] += 1
+        idx['layers'].add(r.get('layer'))
+        idx['checkpoints'].add(r.get('checkpoint_step'))
+
+    # Convert sets/defaultdicts to lists/dicts
+    out: Dict[str, Any] = {}
+    for h, v in index.items():
+        out[h] = {
+            'count': v['count'],
+            'phrases': sorted(list(v['phrases'])),
+            'bins': dict(v['bins']),
+            'layers': sorted([int(x) if isinstance(x, (int, np.integer)) or (isinstance(x, str) and x.isdigit()) else x for x in v['layers']]),
+            'checkpoints': sorted(list(v['checkpoints'])),
+        }
+    return out
+
+
+def save_spline_code_phrase_index(records: List[Dict[str, Any]], output_dir: str) -> str:
+    """Build and save the spline-code-to-phrases index as JSON and CSV."""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    index = build_spline_code_phrase_index(records)
+    json_path = output_path / 'spline_code_phrase_index.json'
+    with open(json_path, 'w') as f:
+        json.dump(index, f, indent=2)
+
+    # Flat CSV
+    rows = []
+    for code_hash, info in index.items():
+        bins = info.get('bins', {})
+        rows.append({
+            'code_hash': code_hash,
+            'count': info.get('count', 0),
+            'n_phrases': len(info.get('phrases', [])),
+            'phrases': '; '.join(info.get('phrases', [])),
+            'low_freq': bins.get('low_freq', 0),
+            'mid_freq': bins.get('mid_freq', 0),
+            'high_freq': bins.get('high_freq', 0),
+            'layers': ';'.join(map(str, info.get('layers', []))),
+            'checkpoints': ';'.join(map(str, info.get('checkpoints', []))),
+        })
+    df = pd.DataFrame(rows)
+    csv_path = output_path / 'spline_code_phrase_index.csv'
+    df.to_csv(csv_path, index=False)
+    return str(json_path)
+
+
+def save_bin_polytope_overlap_stats(records: List[Dict[str, Any]], output_dir: str) -> str:
+    """Compute and save per-frequency-bin polytope overlap statistics.
+
+    Metrics per bin:
+      - unique_codes: number of unique spline codes observed
+      - phrases: number of unique phrases
+      - records: number of records
+      - codes_with_multi_phrases: number of codes with >=2 distinct phrases in that bin
+      - phrase_share_fraction: fraction of phrases that participate in any multi-phrase code
+      - assignment_share_fraction: fraction of record assignments that belong to multi-phrase codes
+    """
+    def normalize_bin(raw: Any) -> str:
+        norm = str(raw).strip().lower()
+        if norm in {'high_frequency', 'highfreq', 'high-freq', 'high'}:
+            return 'high_freq'
+        if norm in {'low_frequency', 'lowfreq', 'low-freq', 'low'}:
+            return 'low_freq'
+        if norm in {'medium_frequency', 'mid_frequency', 'mid', 'medium'}:
+            return 'mid_freq'
+        return norm
+
+    codes_by_bin: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(lambda: defaultdict(lambda: {'phrases': set(), 'count': 0}))
+    phrases_by_bin: Dict[str, set] = defaultdict(set)
+    records_by_bin: Dict[str, int] = defaultdict(int)
+
+    for r in records:
+        bin_key = normalize_bin(r.get('category', r.get('frequency_category', 'unknown')))
+        code = np.asarray(r['spline_code'], dtype=int)
+        h = _hash_code_row(code)
+        phrase = r.get('phrase', r.get('phrase'))
+        codes_by_bin[bin_key][h]['count'] += 1
+        if phrase is not None:
+            codes_by_bin[bin_key][h]['phrases'].add(phrase)
+            phrases_by_bin[bin_key].add(phrase)
+        records_by_bin[bin_key] += 1
+
+    rows = []
+    for bin_key, code_info in codes_by_bin.items():
+        unique_codes = len(code_info)
+        phrases_count = len(phrases_by_bin[bin_key])
+        record_count = records_by_bin[bin_key]
+        multi_codes = [h for h, info in code_info.items() if len(info['phrases']) >= 2]
+        phrases_sharing = set()
+        for h in multi_codes:
+            phrases_sharing.update(code_info[h]['phrases'])
+        phrase_share_fraction = (len(phrases_sharing) / phrases_count) if phrases_count > 0 else 0.0
+        assignment_share_fraction = (
+            sum(code_info[h]['count'] for h in multi_codes) / record_count
+            if record_count > 0 else 0.0
+        )
+        rows.append({
+            'bin': bin_key,
+            'unique_codes': unique_codes,
+            'phrases': phrases_count,
+            'records': record_count,
+            'codes_with_multi_phrases': len(multi_codes),
+            'phrase_share_fraction': float(phrase_share_fraction),
+            'assignment_share_fraction': float(assignment_share_fraction),
+        })
+
+    # Save
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    json_path = output_path / 'bin_polytope_overlap_stats.json'
+    with open(json_path, 'w') as f:
+        json.dump({'bins': rows}, f, indent=2)
+    csv_path = output_path / 'bin_polytope_overlap_stats.csv'
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    return str(json_path)

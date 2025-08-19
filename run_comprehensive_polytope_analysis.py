@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 """
-Comprehensive Multi-Checkpoint Polytope Analysis Script
+Simplified Polytope Analysis Pipeline
 
-This script integrates checkpoint_analysis.py output with the SuperpositionAnalyzer
-to conduct polytope analysis across multiple checkpoints and different layers for 
-high frequency and low frequency patterns.
+This script runs a streamlined polytope analysis comparing high vs low frequency 
+n-gram patterns. Complexity has been reduced for focus on core hypothesis testing.
+
+SIMPLIFIED FEATURES:
+- Direct frequency group comparisons using Mann-Whitney U tests only
+- Simple bar chart visualizations (no t-SNE, PCA, heatmaps)
+- Basic descriptive statistics (no bootstrap confidence intervals)
+- Single checkpoint focus (no multi-checkpoint evolution)
 
 Usage:
     python run_comprehensive_polytope_analysis.py --checkpoint_file path/to/checkpoint_results.pkl
-    
-    # Or with custom parameters:
-    python run_comprehensive_polytope_analysis.py \
-        --checkpoint_file path/to/checkpoint_results.pkl \
-        --output_dir cache/custom_analysis \
-        --min_samples 10 \
-        --visualize
 """
 
 import argparse
@@ -27,7 +25,7 @@ import pandas as pd
 # Add the polytope module to path
 sys.path.append(str(Path(__file__).parent))
 
-from polytope.polytope_analyzer import run_multi_checkpoint_analysis, MultiCheckpointPolytopeAnalyzer
+from polytope.polytope_analyzer import run_multi_checkpoint_analysis
 from polytope.checkpoint_analysis import (
     load_activation_records, 
     analyze_activation_patterns,
@@ -66,6 +64,19 @@ def validate_checkpoint_data(checkpoint_file: str) -> Dict[str, Any]:
             'format': 'plain_list'
         }
         
+        # Normalize category labels on records before wrapping
+        for r in records:
+            raw_cat = r.get('category', None)
+            if not raw_cat or raw_cat == 'unknown':
+                raw_cat = r.get('frequency_category', r.get('frequencyCategory', None))
+            if isinstance(raw_cat, str) and raw_cat:
+                norm = raw_cat.strip().lower()
+                if norm in {'high_frequency', 'highfreq', 'high-freq', 'high'}:
+                    r['category'] = 'high_freq'
+                elif norm in {'low_frequency', 'lowfreq', 'low-freq', 'low'}:
+                    r['category'] = 'low_freq'
+                else:
+                    r['category'] = raw_cat
         data = {'records': records, 'metadata': metadata}
         print("✓ Adapted plain list format to expected structure")
         
@@ -73,6 +84,19 @@ def validate_checkpoint_data(checkpoint_file: str) -> Dict[str, Any]:
         # Already in expected format
         records = data['records']
         metadata = data['metadata']
+        # Normalize categories in dict form as well
+        for r in records:
+            raw_cat = r.get('category', None)
+            if not raw_cat or raw_cat == 'unknown':
+                raw_cat = r.get('frequency_category', r.get('frequencyCategory', None))
+            if isinstance(raw_cat, str) and raw_cat:
+                norm = raw_cat.strip().lower()
+                if norm in {'high_frequency', 'highfreq', 'high-freq', 'high'}:
+                    r['category'] = 'high_freq'
+                elif norm in {'low_frequency', 'lowfreq', 'low-freq', 'low'}:
+                    r['category'] = 'low_freq'
+                else:
+                    r['category'] = raw_cat
         
     else:
         raise ValueError("Checkpoint file must contain either a list of records or a dict with 'records' and 'metadata' keys")

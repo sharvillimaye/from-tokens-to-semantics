@@ -16,7 +16,33 @@ def save_json(data: dict, file_path: Path) -> None:
         json.dump(data, f, indent=4)
 
 def load_dataset(file_path: Path) -> dict:
+    """Load ngram dataset with metadata and ngrams structure."""
     return load_json(file_path)
+
+def extract_ngram_frequencies(dataset: dict) -> pd.DataFrame:
+    """
+    Extract ngram frequencies from the new JSON structure.
+    
+    Args:
+        dataset: Dictionary with 'metadata' and 'ngrams' keys
+        
+    Returns:
+        DataFrame with phrase, cumulative_frequency columns
+    """
+    if 'ngrams' not in dataset:
+        raise ValueError("Dataset must contain 'ngrams' key")
+    
+    data = []
+    for phrase, ngram_data in dataset['ngrams'].items():
+        data.append({
+            'phrase': phrase,
+            'text': ngram_data.get('text', phrase),
+            'cumulative_frequency': ngram_data.get('cumulative_frequency', 0),
+            'shard_frequencies': ngram_data.get('shard_frequencies', []),
+            'checkpoint_frequencies': ngram_data.get('checkpoint_frequencies', {})
+        })
+    
+    return pd.DataFrame(data)
 
 def parquet_to_df(file_path: Path) -> pd.DataFrame:
     return pd.read_parquet(file_path)
@@ -123,6 +149,77 @@ def zipf_frequency_binning(frequencies: pd.Series, num_bins: int = 3) -> pd.Data
     })
 
 
+def analyze_frequency_distribution_from_json(dataset: dict, method: str = "zipf") -> Dict[str, Any]:
+    """
+    Analyze frequency distribution directly from JSON ngram dataset.
+    
+    Args:
+        dataset: Dictionary with 'metadata' and 'ngrams' keys
+        method: Binning method ("zipf" or "binary")
+        
+    Returns:
+        Dictionary with frequency analysis results
+    """
+    if 'ngrams' not in dataset:
+        raise ValueError("Dataset must contain 'ngrams' key")
+    
+    # Extract frequencies from JSON structure
+    phrase_freqs_data = []
+    for phrase, ngram_data in dataset['ngrams'].items():
+        phrase_freqs_data.append({
+            'phrase': phrase,
+            'cumulative_frequency': ngram_data.get('cumulative_frequency', 0)
+        })
+    
+    phrase_freqs_df = pd.DataFrame(phrase_freqs_data)
+    
+    # Apply appropriate binning method
+    if method == "zipf":
+        binned_data = zipf_frequency_binning(
+            phrase_freqs_df.set_index('phrase')['cumulative_frequency'], 
+            num_bins=3
+        )
+        median_threshold = None
+    elif method == "binary":
+        binned_data = simple_frequency_binning(
+            phrase_freqs_df.set_index('phrase')['cumulative_frequency']
+        )
+        median_threshold = binned_data['median_threshold'].iloc[0]
+    else:
+        raise ValueError(f"Unknown method: {method}. Use 'zipf' or 'binary'")
+    
+    # Merge back with original data
+    binned_data = binned_data.astype({'phrase': str}).reset_index(drop=True)
+    phrase_freqs_df = phrase_freqs_df.astype({'phrase': str}).reset_index(drop=True)
+    result_df = phrase_freqs_df.merge(binned_data, on='phrase', how='left')
+    
+    # Remove duplicate columns if they exist
+    if 'frequency' in result_df.columns and 'cumulative_frequency' in result_df.columns:
+        # Keep cumulative_frequency, drop frequency (from binning function)
+        result_df = result_df.drop(['frequency'], axis=1)
+        result_df = result_df.rename(columns={'cumulative_frequency': 'frequency'})
+    
+    # Calculate statistics
+    analysis = {
+        'method': method,
+        'total_unique_phrases': len(result_df),
+        'frequency_distribution': result_df['category'].value_counts().to_dict(),
+        'phrase_frequencies': result_df,
+        'frequency_stats': {
+            'min': result_df['frequency'].min(),
+            'max': result_df['frequency'].max(),
+            'mean': result_df['frequency'].mean(),
+            'median': result_df['frequency'].median(),
+            'std': result_df['frequency'].std()
+        }
+    }
+    
+    if median_threshold is not None:
+        analysis['median_threshold'] = median_threshold
+    
+    return analysis
+
+
 def analyze_frequency_distribution(df: pd.DataFrame, 
                                  step: int = None,
                                  method: str = "zipf") -> Dict[str, Any]:
@@ -152,7 +249,7 @@ def analyze_frequency_distribution(df: pd.DataFrame,
     
     # Apply appropriate binning method
     if method == "zipf":
-        binned_data = zipf_frequency_binning(phrase_freqs.set_index('phrase')['count_cum'], num_bins=5)
+        binned_data = zipf_frequency_binning(phrase_freqs.set_index('phrase')['count_cum'], num_bins=3)
         median_threshold = None
     elif method == "binary":
         binned_data = simple_frequency_binning(phrase_freqs.set_index('phrase')['count_cum'])
@@ -205,6 +302,21 @@ def analyze_frequency_distribution(df: pd.DataFrame,
     return analysis
 
 
+def get_frequency_categories_from_json(dataset: dict, method: str = "zipf") -> pd.DataFrame:
+    """
+    Get phrases categorized by frequency from JSON dataset.
+    
+    Args:
+        dataset: Dictionary with 'metadata' and 'ngrams' keys
+        method: Binning method ("zipf" or "binary")
+        
+    Returns:
+        DataFrame with phrases and their frequency categories
+    """
+    analysis = analyze_frequency_distribution_from_json(dataset, method=method)
+    return analysis['phrase_frequencies']
+
+
 def get_frequency_categories(df: pd.DataFrame, 
                            method: str = "zipf",
                            step: int = None) -> pd.DataFrame:
@@ -226,12 +338,18 @@ def get_frequency_categories(df: pd.DataFrame,
 def df_to_dataset(binned_df: pd.DataFrame) -> Dict[str, Any]:
     """
     Convert binned DataFrame to dataset format optimized for superposition research.
+    Creates multiple samples per phrase using different templates.
     """
     
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
     
-    # Research-optimized neutral template
-    template_sentence = "{phrase} is located in"
+    # Research-optimized neutral templates for countries
+    templates = [
+        "The capital of {country} is",
+        "People from {country} speak", 
+        "The economy of {country} relies on",
+        "The government of {country} is located in",
+    ]
     
     def find_phrase_positions(sentence_ids: List[int], phrase_ids: List[int], phrase_text: str):
         """Enhanced phrase position finding."""
@@ -260,82 +378,120 @@ def df_to_dataset(binned_df: pd.DataFrame) -> Dict[str, Any]:
     for _, row in binned_df.iterrows():
         phrase = str(row['phrase']).strip()
         frequency_category = row['category']
-        sentence = template_sentence.format(phrase=phrase)
         
-        sentence_ids = tokenizer.encode(sentence, add_special_tokens=False)
-        phrase_ids = tokenizer.encode(phrase, add_special_tokens=False)
-        positions = find_phrase_positions(sentence_ids, phrase_ids, phrase)
-        
-        dataset.append({
-            "phrase": phrase,
-            "frequency_category": frequency_category,
-            "sentence": sentence,
-            "token_ids_sentence": sentence_ids,
-            "token_ids_phrase": phrase_ids,
-            "phrase_start_idx": positions["start"],
-            "phrase_end_idx": positions["end"],
-            "activation_target_idx": positions["end"],  # For extraction
-            "template_used": template_sentence
-        })
+        # Create one sample for each template
+        for template_idx, template in enumerate(templates):
+            sentence = template.format(country=phrase)
+            
+            sentence_ids = tokenizer.encode(sentence, add_special_tokens=False)
+            phrase_ids = tokenizer.encode(phrase, add_special_tokens=False)
+            positions = find_phrase_positions(sentence_ids, phrase_ids, phrase)
+            
+            dataset.append({
+                "phrase": phrase,
+                "frequency_category": frequency_category,
+                "sentence": sentence,
+                "token_ids_sentence": sentence_ids,
+                "token_ids_phrase": phrase_ids,
+                "phrase_start_idx": positions["start"],
+                "phrase_end_idx": positions["end"],
+                "activation_target_idx": positions["end"],  # For extraction
+                "template_used": template,
+                "template_idx": template_idx
+            })
     
     return {
         "data": dataset,
-        "template": template_sentence,
+        "templates": templates,
         "total_samples": len(dataset),
+        "samples_per_phrase": len(templates),
+        "unique_phrases": len(binned_df),
         "categories": binned_df['category'].value_counts().to_dict()
     }
 
 
 # Example usage and testing
 if __name__ == "__main__":
-    file_path = Path("/Applications/team-aasa/polytope/cumulative.parquet")
-    df = parquet_to_df(file_path)
+    # Test with new JSON structure
+    json_file_path = Path("/Applications/team-aasa/polytope/ngram_dataset_countries.json")
     
-    print("Dataset shape:", df.shape)
-    print("Columns:", df.columns.tolist())
-    print("\nSample data:")
-    print(df.head())
-    
-    # Analyze frequency distribution
-    print("\n" + "="*50)
-    print("FREQUENCY ANALYSIS")
-    print("="*50)
-    
-    # Get latest step for each phrase
-    latest_df = df.loc[df.groupby('phrase')['step'].idxmax()]
-    print(f"Total unique phrases: {len(latest_df)}")
-    
-    # Test Zipf binning (primary recommendation)
-    print(f"\n--- ZIPF BINNING (RECOMMENDED) ---")
-    zipf_analysis = analyze_frequency_distribution(df, method="zipf")
-    
-    print(f"Frequency distribution:")
-    for category, count in zipf_analysis['frequency_distribution'].items():
-        print(f"  {category}: {count} phrases")
-    
-    # Show some example phrases from each category
-    phrase_freqs = zipf_analysis['phrase_frequencies']
-    print(f"\nExample phrases by category:")
-    for category in phrase_freqs['category'].unique():
-        examples = phrase_freqs[phrase_freqs['category'] == category].head(3)
-        print(f"  {category}: {examples['phrase'].tolist()}")
-    
-    # Test binary binning (secondary option)
-    print(f"\n--- BINARY BINNING (SECONDARY) ---")
-    binary_analysis = analyze_frequency_distribution(df, method="binary")
-    
-    print(f"Frequency distribution:")
-    for category, count in binary_analysis['frequency_distribution'].items():
-        print(f"  {category}: {count} phrases")
-    
-    print(f"Median threshold: {binary_analysis['median_threshold']:,.0f}")
-    
-    # Save categorized data
-    categorized_df = get_frequency_categories(df, method="binary")
-    print(categorized_df.head())
-
-    dataset = df_to_dataset(categorized_df)
-    print(dataset)
-    # save dataset to json
-    save_json(dataset, Path("/Applications/team-aasa/polytope/dataset.json"))
+    if json_file_path.exists():
+        print("="*60)
+        print("TESTING WITH NEW JSON STRUCTURE")
+        print("="*60)
+        
+        # Load JSON dataset
+        dataset = load_dataset(json_file_path)
+        print(f"Loaded dataset with {len(dataset['ngrams'])} ngrams")
+        print(f"Metadata: {dataset['metadata']}")
+        
+        # Test Zipf binning (3 bins: high, medium, low)
+        print(f"\n--- ZIPF BINNING (3 BINS: HIGH/MEDIUM/LOW) ---")
+        zipf_analysis = analyze_frequency_distribution_from_json(dataset, method="zipf")
+        
+        print(f"Frequency distribution:")
+        for category, count in zipf_analysis['frequency_distribution'].items():
+            print(f"  {category}: {count} phrases")
+        
+        # Show example phrases from each category
+        phrase_freqs = zipf_analysis['phrase_frequencies']
+        print(f"\nExample phrases by category:")
+        for category in phrase_freqs['category'].unique():
+            examples = phrase_freqs[phrase_freqs['category'] == category].head(3)
+            freqs = examples['frequency'].tolist()
+            phrases = examples['phrase'].tolist()
+            for phrase, freq in zip(phrases, freqs):
+                print(f"  {category}: {phrase} (freq: {freq:,})")
+        
+        # Test binary binning
+        print(f"\n--- BINARY BINNING ---")
+        binary_analysis = analyze_frequency_distribution_from_json(dataset, method="binary")
+        
+        print(f"Frequency distribution:")
+        for category, count in binary_analysis['frequency_distribution'].items():
+            print(f"  {category}: {count} phrases")
+        
+        print(f"Median threshold: {binary_analysis['median_threshold']:,.0f}")
+        
+        # Create dataset with multiple templates
+        print(f"\n--- CREATING POLYTOPE DATASET ---")
+        categorized_df = get_frequency_categories_from_json(dataset, method="zipf")
+        polytope_dataset = df_to_dataset(categorized_df)
+        
+        print(f"Generated dataset:")
+        print(f"  Total samples: {polytope_dataset['total_samples']}")
+        print(f"  Samples per phrase: {polytope_dataset['samples_per_phrase']}")
+        print(f"  Unique phrases: {polytope_dataset['unique_phrases']}")
+        print(f"  Templates: {len(polytope_dataset['templates'])}")
+        print(f"  Categories: {polytope_dataset['categories']}")
+        
+        # Show a few examples
+        print(f"\nExample generated samples:")
+        for i in range(min(6, len(polytope_dataset['data']))):
+            sample = polytope_dataset['data'][i]
+            print(f"  {sample['phrase']} ({sample['frequency_category']}):")
+            print(f"    Template {sample['template_idx']}: {sample['sentence']}")
+            print(f"    Phrase position: {sample['phrase_start_idx']}-{sample['phrase_end_idx']}")
+        
+        # Save the polytope dataset
+        save_json(polytope_dataset, Path("/Applications/team-aasa/polytope/country_capital_polytope_dataset.json"))
+        print(f"\nSaved polytope dataset to: country_capital_polytope_dataset.json")
+        
+    else:
+        print(f"JSON file not found: {json_file_path}")
+        print("Falling back to parquet testing...")
+        
+        # Fallback to old parquet testing
+        file_path = Path("/Applications/team-aasa/polytope/cumulative.parquet")
+        if file_path.exists():
+            df = parquet_to_df(file_path)
+            print("Dataset shape:", df.shape)
+            print("Columns:", df.columns.tolist())
+            
+            # Test with old structure
+            categorized_df = get_frequency_categories(df, method="zipf")
+            dataset = df_to_dataset(categorized_df)
+            save_json(dataset, Path("/Applications/team-aasa/polytope/dataset.json"))
+        else:
+            print("No data files found for testing.")
     

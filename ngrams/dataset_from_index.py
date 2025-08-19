@@ -5,10 +5,95 @@ from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 import re
 import nltk
+import json
 
 import numpy as np
 from tokengrams import MemmapIndex
 from transformers import AutoTokenizer
+
+from __future__ import annotations
+from typing import Iterable, List, Sequence, Tuple
+import re
+import numpy as np
+
+# Constant per Pythia README / Hugging Face model cards
+PYTHIA_TOKENS_PER_STEP: int = 2_097_152  # 2^21
+
+# The 11 early checkpoints before the regular 1k interval, plus step 0
+_EARLY_STEPS: Tuple[int, ...] = (0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000)
+
+
+def canonical_pythia_steps(include_early: bool = True) -> np.ndarray:
+    """
+    Return the canonical list of Pythia checkpoint steps as a 1-D array (int64).
+
+    Args:
+        include_early: whether to include the early steps
+            {0,1,2,4,8,16,32,64,128,256,512,1000}.
+
+    Returns:
+        np.ndarray[int64] of shape (154,) when include_early=True.
+    """
+    regular = np.arange(1000, 143_001, 1000, dtype=np.int64)  # 1000..143000 inclusive
+    if include_early:
+        early = np.array(_EARLY_STEPS, dtype=np.int64)
+        # avoid double-counting 1000
+        early_mask = early != 1000
+        steps = np.concatenate([early[early_mask], regular])
+    else:
+        steps = regular
+    return steps
+
+
+def canonical_pythia_cutoffs(include_early: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Return (steps, token_cutoffs) using the canonical schedule and tokens/step.
+    """
+    steps = canonical_pythia_steps(include_early=include_early)
+    cutoffs = steps * np.int64(PYTHIA_TOKENS_PER_STEP)
+    return steps, cutoffs
+
+
+_STEP_RE = re.compile(r"^step(?P<num>\d+)$")
+
+
+def steps_from_hf_revisions(names: Iterable[str]) -> np.ndarray:
+    """
+    Parse a collection of Hugging Face checkpoint revision names like "step3000"
+    into a sorted int64 array of steps.
+    """
+    steps: List[int] = []
+    for name in names:
+        m = _STEP_RE.match(name.strip())
+        if m:
+            steps.append(int(m.group("num")))
+    steps_arr = np.array(sorted(set(steps)), dtype=np.int64)
+    return steps_arr
+
+
+def cutoffs_from_steps(steps: Sequence[int], *, tokens_per_step: int = PYTHIA_TOKENS_PER_STEP) -> np.ndarray:
+    """
+    Compute token cutoffs from given steps and a tokens-per-step factor (defaults to Pythia's 2,097,152).
+    """
+    s = np.asarray(steps, dtype=np.int64)
+    if s.ndim != 1:
+        raise ValueError("steps must be 1-D")
+    if tokens_per_step <= 0:
+        raise ValueError("tokens_per_step must be > 0")
+    return s * np.int64(tokens_per_step)
+
+
+def sanity_check_main_total(steps: np.ndarray, cutoffs: np.ndarray) -> None:
+    """
+    Assert that the final checkpoint equals 143000 steps and total tokens == 299,892,736,000.
+    Raises AssertionError if the expectation does not hold.
+    """
+    assert steps.max() == 143_000, f"unexpected max step: {steps.max()}"
+    expected_total = np.int64(143_000) * np.int64(PYTHIA_TOKENS_PER_STEP)
+    assert cutoffs[steps.argmax()] == expected_total, (
+        f"unexpected final tokens: {cutoffs[steps.argmax()]} vs {expected_total}"
+    )
+
 
 ENGLISH_STOPWORDS = set(nltk.corpus.stopwords.words('english'))
 
@@ -277,9 +362,188 @@ def is_meaningful_ngram(ngram: str, original_words: list[str]) -> bool:
     
     return True
 
-def get_cutoff_frequencies(ngrams: list[str]) -> list[str]:
-    """get the cutoff frequencies of the ngrams"""
-    return []
+def get_cumulative_frequency_counts(
+    indexes: list[MemmapIndex], 
+    ngrams: list[str], 
+    tokenizer: AutoTokenizer,
+    shard_token_counts: Optional[list[int]] = None
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Calculate cumulative frequency counts for n-grams across all shards.
+    
+    Args:
+        indexes: List of MemmapIndex objects for each shard
+        ngrams: List of n-gram strings to analyze
+        tokenizer: Tokenizer for encoding n-grams
+        shard_token_counts: Optional list of token counts per shard
+        
+    Returns:
+        Dict mapping n-gram -> {
+            'cumulative_frequency': total occurrences across all shards,
+            'shard_frequencies': list of frequencies per shard,
+            'positions_by_shard': positions in each shard
+        }
+    """
+    results = {}
+    
+    for ngram in ngrams:
+        # Get positions across all shards
+        positions_by_index = get_all_positions_local(indexes, ngram, tokenizer)
+        
+        # Calculate frequencies per shard
+        shard_frequencies = []
+        total_frequency = 0
+        
+        for i in range(len(indexes)):
+            shard_freq = len(positions_by_index.get(i, np.array([], dtype=np.int64)))
+            shard_frequencies.append(shard_freq)
+            total_frequency += shard_freq
+        
+        results[ngram] = {
+            'cumulative_frequency': total_frequency,
+            'shard_frequencies': shard_frequencies,
+            'positions_by_shard': {i: positions_by_index.get(i, np.array([], dtype=np.int64)).tolist() 
+                                 for i in range(len(indexes))}
+        }
+    
+    return results
+
+
+def calculate_checkpoint_frequencies(
+    indexes: list[MemmapIndex],
+    ngrams: list[str],
+    tokenizer: AutoTokenizer,
+    shard_token_counts: Optional[list[int]] = None,
+    include_early: bool = True
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Calculate checkpoint-wise frequencies for n-grams using Pythia cutoffs.
+    
+    Args:
+        indexes: List of MemmapIndex objects for each shard
+        ngrams: List of n-gram strings to analyze
+        tokenizer: Tokenizer for encoding n-grams
+        shard_token_counts: Optional list of token counts per shard
+        include_early: Whether to include early Pythia checkpoints
+        
+    Returns:
+        Dict mapping n-gram -> {
+            'cumulative_frequency': total occurrences,
+            'checkpoint_frequencies': dict of checkpoint_step -> frequency,
+            'pythia_steps': list of checkpoint steps,
+            'token_cutoffs': list of token cutoffs for each checkpoint
+        }
+    """
+    # Get Pythia checkpoint information
+    pythia_steps, token_cutoffs = canonical_pythia_cutoffs(include_early=include_early)
+    
+    # Resolve shard token offsets for global positions
+    try:
+        index_offsets = resolve_index_offsets(indexes, shard_token_counts)
+    except Exception:
+        # Fallback: assume sequential shards
+        if shard_token_counts:
+            index_offsets = []
+            acc = 0
+            for count in shard_token_counts:
+                index_offsets.append(acc)
+                acc += count
+        else:
+            index_offsets = [0] * len(indexes)
+    
+    results = {}
+    
+    for ngram in ngrams:
+        # Get all global positions for this n-gram
+        global_positions = get_all_positions_global(
+            indexes, ngram, tokenizer, 
+            index_offsets=index_offsets,
+            shard_token_counts=shard_token_counts
+        )
+        
+        # Extract start positions and sort them
+        start_positions = sorted([pos[0] for pos in global_positions])
+        total_frequency = len(start_positions)
+        
+        # Calculate frequency up to each checkpoint
+        checkpoint_frequencies = {}
+        
+        for step, cutoff in zip(pythia_steps, token_cutoffs):
+            # Count positions that occur before this cutoff
+            freq = sum(1 for pos in start_positions if pos < cutoff)
+            checkpoint_frequencies[int(step)] = freq
+        
+        results[ngram] = {
+            'cumulative_frequency': total_frequency,
+            'checkpoint_frequencies': checkpoint_frequencies,
+            'pythia_steps': pythia_steps.tolist(),
+            'token_cutoffs': token_cutoffs.tolist(),
+            'global_positions': start_positions[:100]  # Limit to first 100 for size
+        }
+    
+    return results
+
+
+def generate_ngram_analysis_json(
+    indexes: list[MemmapIndex],
+    ngrams: list[str],
+    tokenizer: AutoTokenizer,
+    shard_token_counts: Optional[list[int]] = None,
+    include_early: bool = True,
+    output_path: Optional[str] = None
+) -> str:
+    """
+    Generate a comprehensive JSON analysis of n-grams across shards with Pythia checkpoints.
+    
+    Returns:
+        Clean JSON string with n-gram analysis data
+    """
+    # Calculate cumulative frequencies
+    cumulative_data = get_cumulative_frequency_counts(
+        indexes, ngrams, tokenizer, shard_token_counts
+    )
+    
+    # Calculate checkpoint-wise frequencies
+    checkpoint_data = calculate_checkpoint_frequencies(
+        indexes, ngrams, tokenizer, shard_token_counts, include_early
+    )
+    
+    # Combine the data into a comprehensive structure
+    analysis_data = {
+        'metadata': {
+            'num_shards': len(indexes),
+            'num_ngrams': len(ngrams),
+            'include_early_checkpoints': include_early,
+            'total_tokens': sum(shard_token_counts) if shard_token_counts else None,
+            'pythia_tokens_per_step': PYTHIA_TOKENS_PER_STEP
+        },
+        'ngrams': {}
+    }
+    
+    # Merge data for each n-gram
+    for ngram in ngrams:
+        cum_data = cumulative_data[ngram]
+        checkpoint_info = checkpoint_data[ngram]
+        
+        analysis_data['ngrams'][ngram] = {
+            'text': ngram,
+            'cumulative_frequency': cum_data['cumulative_frequency'],
+            'shard_frequencies': cum_data['shard_frequencies'],
+            'checkpoint_frequencies': checkpoint_info['checkpoint_frequencies'],
+            'pythia_steps': checkpoint_info['pythia_steps'],
+            'token_cutoffs': checkpoint_info['token_cutoffs'],
+            'sample_positions': checkpoint_info['global_positions']
+        }
+    
+    # Generate clean JSON
+    json_output = json.dumps(analysis_data, indent=2, ensure_ascii=False)
+    
+    # Save to file if requested
+    if output_path:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(json_output)
+    
+    return json_output
 
 
 def build_ngram_dataset(
