@@ -515,8 +515,8 @@ def build_arg_parser():
     parser.add_argument("--neuron", type=int, required=True, help="Row index of neuron in weight matrix")
     parser.add_argument("--max_examples", type=int, default=100, help="How many high-act examples to keep")
     parser.add_argument("--threshold", type=float, default=0.6, help="Threshold for inclusion (fraction of peak activation)")
-    parser.add_argument("--peak_activation", type=float, default=2.5, help="Peak activation for this neuron (from Neuroscope)")
-    parser.add_argument("--distance_threshold", type=float, default=0.8, help="Distance threshold for clustering (cosine distance)")
+    parser.add_argument("--peak_activation", type=float, default=2.8, help="Peak activation for this neuron (from Neuroscope)")
+    parser.add_argument("--distance_threshold", type=float, default=0.75, help="Distance threshold for clustering (cosine distance)")
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--no_text", action="store_true", help="Skip text decoding for maximum speed")
     parser.add_argument("--outfile", type=Path, help="Output file path (single-run metrics JSON)")
@@ -531,7 +531,7 @@ def build_arg_parser():
     parser.add_argument("--min_step", type=int, default=None, help="Minimum checkpoint step to include (series mode)")
     parser.add_argument("--max_step", type=int, default=None, help="Maximum checkpoint step to include (series mode)")
     parser.add_argument("--series_char_budget", type=int, default=30_000,
-                        help="Approximate total characters of text to stream per checkpoint in series mode")
+                        help="Approximate total text excerpts to stream per checkpoint in series mode")
 
     return parser
 
