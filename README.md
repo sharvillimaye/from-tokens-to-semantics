@@ -22,7 +22,7 @@ The repository consists of several research components:
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone <team-aasa>
 cd team-aasa
 ```
 
