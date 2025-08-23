@@ -1,23 +1,8 @@
 #!/usr/bin/env python
 """
 A script that analyzes clustering and superposition over training checkpoints.
-Mostly like demo.py, but supports model checkpoints, robust HF auth handling, and a --series mode. 
 
-NEW:
- --series mode iterates over Pythia-70M training checkpoints and
-   writes a JSONL (one row per checkpoint) and a CSV summary.
-
-CHANGES:
-- Robust HF auth handling: on 401 error, clear any
-  bad tokens (env + local cache) and retry.
-- Guard clustering against n < 2 excerpts to avoid HAC crash.
-- Make metric keys consistent even on edge cases so CSV writing never fails.
 """
-
-# TODO: Add advanced visualization 1) average inter- and intra-cluster distance at each checkpoint
-#                                  2) average cluster size at each checkpoint
-#                                  3) max cluster size at each checkpoint
-# Run global tests over layers of Pythia-70M and Pythia-160M
 
 import argparse
 import os
