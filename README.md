@@ -1,15 +1,15 @@
 # From Tokens to Semantics: The Emergence and Stabilization of Polysemanticity in Language Models
 
-This repository contains research code and analysis pipelines for studying neural network behavior, particularly focusing on polysemanticity, superposition, and temporal dynamics in language models.
+This repository contains code and analysis pipelines for the paper "From Tokens to Semantics: The Emergence and Stabilization of Polysemanticity in Language Models."
 
 ## Project Overview
 
-The repository consists of several research components:
+The repository consists of several components:
 
-- **Neuron Embeddings Analysis**: Analysis of neuron activations and clustering behavior
-- **JSD Polysemanticity Pipeline**: Jensen-Shannon Divergence analysis of frequency-affinity relationships
-- **Polytope Analysis**: Geometric analysis of neural representations
-- **N-grams Analysis**: Token sequence analysis and processing
+- **Neuron Embedding Pipeline**: Analysis of neuron activations and clustering behavior
+- **N-gram Analysis**: Token sequence analysis and processing
+- **JSD Calculations**: Jensen-Shannon Divergence analysis of frequency-affinity relationships
+- **Polytope Metrics**: Geometric analysis of neural representations
 
 ## Quick Start
 
