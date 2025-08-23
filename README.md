@@ -109,37 +109,9 @@ To add new dependencies, edit `pyproject.toml` and run:
 uv sync
 ```
 
-## Research Areas
-
-- **Polysemanticity**: Study of neurons that respond to multiple concepts
-- **Superposition**: Analysis of how neural representations evolve over time
-- **Frequency Affinity**: Relationship between token frequency and neuron behavior
-- **Temporal Dynamics**: How neural representations change during training
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@software{team_aasa_research,
-  title={Team AASA Research Repository},
-  author={Team AASA},
-  year={2024},
-  url={https://github.com/your-org/team-aasa}
-}
-```
 
 ## Contact
 
