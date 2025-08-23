@@ -1,280 +1,399 @@
-# Multi-Dimensional Superposition Analysis
+# Polytope Superposition Analysis Pipeline
 
-Enhanced polytope analysis implementation for studying superposition evolution across neural network training checkpoints.
+A comprehensive research pipeline for analyzing superposition phenomena in Large Language Models (LLMs) through polytope density analysis and spline code extraction.
 
 ## Overview
 
-This module implements a **three-pronged visualization strategy** for analyzing how n-gram representations evolve during training:
+This pipeline implements mechanistic interpretability techniques to study how neural networks represent multiple concepts within the same activation space (superposition). It focuses on analyzing the polytope structure of neural activations and how it evolves during training.
 
-1. **Temporal Evolution Analysis** (Primary) - Track single layer across training checkpoints
-2. **Layer-wise Progression Analysis** (Secondary) - Compare metrics across network layers  
-3. **Correlation Analysis** (Supporting) - N-gram frequency vs polytope structure
+### Key Research Contributions
 
-## Key Features
+- **Spline Code Analysis**: Extract binary patterns from pre-activation vectors to identify polytope regions
+- **Layer-wise Analysis**: Track superposition evolution across network depth
+- **Frequency-based Comparison**: Compare high vs low frequency n-gram representations
+- **Training Evolution**: Monitor polytope changes across training checkpoints
+- **Publication-ready Visualizations**: Generate NeurIPS/ICML quality figures in PDF format
 
-### Advanced Polytope Metrics
-- **Custom convex hull approximation** for high-dimensional activations
-- **Monte Carlo volume estimation** fallback for degenerate cases
-- **Robust dimension reduction** with PCA and 95% variance retention
-- **Statistical significance testing** with bootstrap confidence intervals
+## Repository Structure
 
-### Intelligent Checkpoint Selection
-- **Adaptive sampling strategy**: Dense early training, sparse late training
-- **Configurable checkpoint limits** to manage computational costs
-- **Training dynamics awareness** for optimal checkpoint selection
+```
+team-aasa/
+├── polytope/                      # Core polytope analysis modules
+│   ├── checkpoint_analysis.py     # Extract activations from model checkpoints
+│   ├── refined_polytope_analyzer.py # Main analysis pipeline
+│   ├── visualization_utils.py     # Publication-quality visualizations
+│   ├── dataset_from_index.py      # N-gram dataset creation from tokengrams
+│   └── ngram_dataset.py          # Dataset utilities
 
-### Publication-Ready Visualizations
-- **Figure 1**: Temporal evolution plots with multiple frequency bins
-- **Figure 2**: Layer progression heatmaps with custom colormaps
-- **Figure 3**: Correlation scatter plots with regression lines and confidence intervals
+```
+
+## Installation
+
+### Prerequisites
+
+- Python 3.8+
+- CUDA-capable GPU (recommended for model analysis)
+- ~50GB free disk space for model checkpoints and cache
+
+### Dependencies
+
+```bash
+# Core dependencies
+pip install torch numpy pandas matplotlib seaborn
+pip install transformers nnsight tokengrams
+pip install loguru tqdm pathlib
+
+# For visualization
+pip install matplotlib scipy scikit-learn
+
+# For notebook support
+pip install jupyter ipykernel
+```
+
+### Memory Requirements
+
+- **Small models (70M-410M)**: 8-16GB RAM
+- **Medium models (1B-2.8B)**: 16-32GB RAM  
+- **Large models (6.9B+)**: 32GB+ RAM recommended
 
 ## Quick Start
 
-### Basic Usage
+### 1. Basic Polytope Analysis
 
 ```python
-from polytope_metrics import enhanced_run_analysis
-from checkpoint_analysis import load_semantic_frequency_datasets
+from polytope.refined_polytope_analyzer import run_polytope_analysis_pipeline
 
-# Load your activation records
-records = load_activation_records("path/to/records.pkl")
-
-# Run complete analysis
-results = enhanced_run_analysis(
-    records=records,
-    target_layers=[4, 6, 8, 10],
-    checkpoint_selection="adaptive",
-    max_checkpoints=15
-)
-
-# Results include all three analyses + publication figures
-```
-
-### Individual Analysis Components
-
-```python
-from polytope_metrics import (
-    temporal_evolution_analysis,
-    layer_progression_analysis, 
-    enhanced_correlation_analysis
-)
-
-# 1. Temporal Evolution (Primary Analysis)
-temporal_results = temporal_evolution_analysis(
-    records=records,
-    target_layer=6,  # Middle layer
-    frequency_bins=3
-)
-
-# 2. Layer Progression (Secondary Analysis)  
-progression_results = layer_progression_analysis(
-    records=records,
-    target_layers=[4, 6, 8, 10]
-)
-
-# 3. Correlation Analysis (Supporting Analysis)
-correlation_results = enhanced_correlation_analysis(
-    records=records,
-    target_layers=[6, 8, 10]
+# Run analysis on pre-computed activation records
+results_dir = run_polytope_analysis_pipeline(
+    checkpoint_file="cache/checkpoint_analysis_results.pkl",
+    output_dir="results/polytope_analysis"
 )
 ```
 
-### Generate NeurIPS Figures
+### 2. Extract Activations from Model Checkpoints
 
 ```python
-from polytope_metrics import create_neurips_figures
+from polytope.checkpoint_analysis import run_checkpoint_analysis_pipeline
 
-# Generate all three publication-ready figures
-saved_figures = create_neurips_figures(
-    records=records,
-    target_layer=6,
-    output_dir="reports/figures"
-)
-
-# Returns: {'figure1': 'path/to/fig1.png', 'figure2': '...', 'figure3': '...'}
-```
-
-## Data Pipeline
-
-### Extract Activations from Checkpoints
-
-```python
-from checkpoint_analysis import (
-    run_checkpoint_analysis_pipeline,
-    load_semantic_frequency_datasets
-)
-
-# Complete pipeline from datasets to analysis
+# Extract activations from Pythia model checkpoints
 results_file = run_checkpoint_analysis_pipeline(
-    model_name="EleutherAI/pythia-70m",
-    checkpoints=["1000", "5000", "10000", "20000"],
-    target_layers=[2, 4, 6, 8, 10, 12]
+    model_name="EleutherAI/pythia-6.9b",
+    checkpoints=["1000", "5000", "10000", "50000", "143000"],
+    dataset_path="polytope/dataset.json",
+    output_dir="cache/checkpoint_analysis"
 )
 ```
 
-### Load and Process Datasets
+### 3. Create Publication Figures
 
 ```python
-# Load semantic frequency datasets
-datasets = load_semantic_frequency_datasets("datasets/semantic_frequency")
+from polytope.visualization_utils import create_visualizations_from_json
 
-# Available datasets:
-# - technology_high_freq_dataset.json
-# - technology_low_freq_dataset.json  
-# - science_high_freq_dataset.json
-# - education_high_freq_dataset.json
-# - general_high_freq_dataset.json
-# - general_low_freq_dataset.json
-```
-
-## Analysis Strategy
-
-### Temporal Evolution Analysis
-**Purpose**: Demonstrate how superposition structure evolves during training
-
-**Key Metrics**:
-- Polytope volume evolution
-- Vertex count changes  
-- Effective dimension progression
-- Frequency-dependent patterns
-
-**Outputs**:
-- Multi-line evolution plots
-- Statistical trend correlations
-- Bootstrap confidence intervals
-
-### Layer Progression Analysis  
-**Purpose**: Show representational complexity changes through network depth
-
-**Key Metrics**:
-- Volume heatmaps across layers × checkpoints
-- Complexity progression patterns
-- Critical layer identification
-
-**Outputs**:
-- Heatmap visualizations
-- Layer-wise statistics
-- Progression matrices
-
-### Correlation Analysis
-**Purpose**: Relate n-gram frequency to polytope structure
-
-**Key Metrics**:
-- Frequency vs activation norm
-- Frequency vs sparsity patterns
-- Training stage comparisons
-
-**Outputs**:
-- Scatter plots with regression lines
-- Significance testing (p-values)
-- Confidence intervals
-
-## Advanced Features
-
-### Adaptive Checkpoint Selection
-
-Implements training dynamics-aware checkpoint selection:
-- **Early training** (0-20%): Dense sampling (every 1-2 checkpoints)
-- **Middle training** (20-60%): Moderate sampling (every 3-5 checkpoints)  
-- **Late training** (60-100%): Sparse sampling (every 5-10 checkpoints)
-
-```python
-from polytope_metrics import adaptive_checkpoint_selection
-
-selected = adaptive_checkpoint_selection(
-    available_checkpoints=["100", "200", ..., "10000"],
-    max_checkpoints=15
+# Generate PDF figures for papers
+create_visualizations_from_json(
+    json_path="results/polytope_analysis_results.json",
+    output_dir="paper_figures",
+    output_format="pdf"  # or "png"
 )
 ```
 
-### Statistical Framework
+## Core Components
 
-Bootstrap confidence intervals and significance testing:
+### 1. Checkpoint Analysis (`checkpoint_analysis.py`)
 
+Extracts neural activations from model checkpoints at specific token positions.
+
+**Key Features:**
+- Supports Pythia, GPT-2, LLaMA model families
+- Extracts both pre and post-activation vectors
+- Automatic layer selection for different model sizes
+- Memory-efficient batch processing
+- Network storage for large-scale analyses
+
+**Usage:**
 ```python
-from polytope_metrics import bootstrap_confidence_intervals
+from polytope.checkpoint_analysis import extract_activations_from_dataset
 
-mean, lower, upper = bootstrap_confidence_intervals(
-    data=volume_data,
-    statistic_func=np.mean,
-    n_bootstrap=1000,
-    confidence_level=0.95
+records = extract_activations_from_dataset(
+    model_name="EleutherAI/pythia-6.9b",
+    checkpoints=["1000", "10000", "50000"],
+    dataset=dataset,
+    target_layers=[1, 8, 16, 24, 31],  # Auto-selected if None
+    batch_size=32
 )
 ```
 
-### Custom Convex Hull Implementation
+### 2. Polytope Analyzer (`refined_polytope_analyzer.py`)
 
-Handles high-dimensional polytopes with robust approximation:
+Core analysis engine for computing polytope metrics and superposition quantification.
+
+**Key Metrics:**
+- **Polytope Density**: Hamming distance / Euclidean distance ratio
+- **Participation Ratio**: Effective dimensionality of representations
+- **Pattern Reuse**: Frequency of shared polytope patterns
+- **Interference Patterns**: Cross-frequency group interactions
+- **N-gram Mapping**: Polysemantic polytope analysis
+
+**Usage:**
+```python
+from polytope.refined_polytope_analyzer import RefinedPolytopeAnalyzer
+
+analyzer = RefinedPolytopeAnalyzer()
+results = analyzer.run_full_analysis(
+    checkpoint_path="cache/activations.pkl",
+    output_dir="analysis_results"
+)
+```
+
+### 3. Visualization Utils (`visualization_utils.py`)
+
+Creates publication-quality figures optimized for academic papers.
+
+**Features:**
+- PDF output with proper font embedding for Overleaf
+- Layer-wise heatmaps and evolution plots
+- Cross-layer comparison visualizations
+- Automatic LaTeX code generation
+- Color-blind friendly palettes
+
+### 4. N-gram Processing (`ngrams/`)
+
+Handles n-gram frequency analysis and dataset creation.
+
+**Components:**
+- `interface.py`: Main n-gram processing interface
+- `backends/`: Storage backends (in-memory, tokengrams)
+- `parsers/`: Model-specific checkpoint cutoff parsers
+
+## Analysis Pipeline
+
+### Step 1: Prepare N-gram Dataset
 
 ```python
-from polytope_metrics import approximate_convex_hull, monte_carlo_volume_estimation
+# Create dataset with high/low frequency n-grams
+from polytope.ngram_dataset import create_ngram_polytope_dataset
 
-# Greedy hull approximation
-hull_vertices = approximate_convex_hull(points, epsilon=0.1, max_iter=500)
-
-# Monte Carlo volume fallback
-volume = monte_carlo_volume_estimation(points, n_samples=100000)
+dataset = create_ngram_polytope_dataset(
+    high_freq_phrases=["the cat", "New York", "machine learning"],
+    low_freq_phrases=["quantum entanglement", "archaeological evidence"],
+    template="The capital of {country} is {capital}",
+    model_name="EleutherAI/pythia-6.9b"
+)
 ```
 
-## Implementation Principles
+### Step 2: Extract Activations
 
-Following the **AI Research Codebase Principles**:
+```python
+# Extract activations across training checkpoints
+from polytope.checkpoint_analysis import run_checkpoint_analysis_pipeline
 
-1. **Simplicity First**: Minimal, readable functions without over-engineering
-2. **Task-Focused**: Direct implementation of research objectives
-3. **Robust Implementation**: Input validation and error handling throughout
-4. **Research-Specific**: Clear experimental purpose for each component
-5. **Modular Design**: Reusable components for different analyses
-
-## File Structure
-
-```
-polytope/
-├── polytope_metrics.py          # Core analysis functions
-├── checkpoint_analysis.py       # Data extraction pipeline  
-├── neurips_analysis_example.py  # Complete demo
-└── README.md                    # This file
+checkpoint_results = run_checkpoint_analysis_pipeline(
+    model_name="EleutherAI/pythia-6.9b",
+    checkpoints=["1000", "10000", "50000", "143000"],
+    dataset_path="dataset.json",
+    target_layers=None,  # Auto-select optimal layers
+    batch_size=16
+)
 ```
 
-## Example Output
+### Step 3: Analyze Polytopes
 
-### Analysis Summary
-```
-=== Analysis Complete ===
-Analyzed 24,000 records across 8 checkpoints
-Generated 3 publication figures
+```python
+# Run polytope analysis
+from polytope.refined_polytope_analyzer import run_polytope_analysis_pipeline
 
-Volume Evolution Findings:
-  Trend correlation: 0.734
-  Mean volume: 0.000847
-  95% CI: [0.000623, 0.001071]
-  → FINDING: Strong positive volume growth during training
-
-Layer Complexity Findings:
-  Overall mean complexity: 12.47
-  Complexity variance: 8.23
-  Lowest complexity: Layer 4 (8.32)
-  Highest complexity: Layer 10 (18.91)
+results_dir = run_polytope_analysis_pipeline(
+    checkpoint_file=checkpoint_results,
+    output_dir="polytope_results"
+)
 ```
 
-### Generated Figures
-- `figure1_temporal_evolution.png` - Evolution across checkpoints
-- `figure2_layer_progression.png` - Heatmap across layers  
-- `figure3_correlation_analysis.png` - Frequency correlations
+### Step 4: Generate Visualizations
 
-## Requirements
+```python
+# Create publication figures
+from polytope.visualization_utils import create_visualizations_from_json
 
-- `numpy`, `pandas`, `matplotlib`, `seaborn`
-- `scikit-learn` (PCA, preprocessing)
-- `scipy` (ConvexHull, statistics)
-- `nnsight` (model activation extraction)
-- `torch` (PyTorch for model handling)
+create_visualizations_from_json(
+    json_path=f"{results_dir}/polytope_analysis_results.json",
+    output_dir="paper_figures",
+    output_format="pdf"
+)
+```
+
+## Configuration Options
+
+### Model Support
+
+| Model Family | Layers Path | Activation Function | Status |
+|--------------|-------------|-------------------|---------|
+| Pythia | `gpt_neox.layers` | GELU | ✅ Full Support |
+| GPT-2 | `transformer.h` | GELU | ✅ Full Support |
+| LLaMA/Mistral | `model.layers` | SiLU | ✅ Beta Support |
+
+### Layer Selection
+
+The pipeline automatically selects optimal layers based on model size:
+
+- **Small models (≤12 layers)**: Early, middle, late layers
+- **Medium models (13-24 layers)**: Strategic sampling across depth
+- **Large models (25+ layers)**: Focus on transition points (early: 1,2,4,6; middle: 16; late: 24,28,31)
+
+### Memory Management
+
+For large-scale analysis:
+
+```python
+# Use network storage for checkpoint progress
+records = extract_activations_from_dataset_with_network_storage(
+    model_name="EleutherAI/pythia-6.9b",
+    checkpoints=checkpoints,
+    dataset=dataset,
+    network_storage_path="/shared/polytope_cache",
+    resume=True  # Resume from previous runs
+)
+```
+
+## Research Applications
+
+### 1. Superposition Evolution Study
+
+Track how superposition emerges during training:
+
+```python
+# Analyze progression from step 1 to 143000
+checkpoints = [str(2**i) for i in range(10)]  # 1, 2, 4, ..., 512
+checkpoints.extend([str(i) for i in range(1000, 144000, 1000)])
+```
+
+### 2. Layer-wise Mechanistic Analysis
+
+Compare polytope structure across network depth:
+
+```python
+analyzer = RefinedPolytopeAnalyzer()
+results = analyzer.analyze_checkpoint(records, checkpoint_step="50000", 
+                                    use_layer_wise_analysis=True)
+```
+
+### 3. Frequency-based Representation Study
+
+Analyze how frequency affects neural representations:
+
+```python
+# Create datasets with controlled frequency differences
+high_freq = ["the", "and", "of", "to", "a"]  # Top 5 most frequent
+low_freq = ["quixotic", "ephemeral", "serendipity"]  # Rare words
+```
+
+## Performance Optimization
+
+### GPU Memory Management
+
+```python
+# Batch size recommendations by GPU memory
+GPU_MEMORY_BATCH_SIZES = {
+    "8GB": 4,
+    "16GB": 8, 
+    "24GB": 16,
+    "40GB": 32,
+    "80GB": 64
+}
+```
+
+### Parallel Processing
+
+```python
+# Use multiprocessing for checkpoint analysis
+analyzer.run_full_analysis(
+    checkpoint_path="data.pkl",
+    use_multiprocessing=True,
+    max_workers=4  # Adjust based on available CPU/memory
+)
+```
+
+## Output Formats
+
+### Analysis Results
+
+- `polytope_analysis_results.json`: Complete analysis results
+- `analysis_summary.txt`: Human-readable summary report
+- `checkpoint_progress/`: Individual checkpoint files for resume capability
+
+### Visualizations
+
+- **Heatmaps**: Layer × Checkpoint polytope density/participation ratio
+- **Evolution Plots**: Metric changes over training
+- **Cross-layer Analysis**: Comparative layer analysis
+- **Small Multiples**: Per-layer time series
+
+### Publication Support
+
+- PDF figures with proper font embedding for Overleaf
+- LaTeX code generation for figure inclusion
+- Color-blind friendly palettes
+- High-resolution output (300 DPI)
+
+## Troubleshooting
+
+### Common Issues
+
+1. **CUDA Out of Memory**
+   ```python
+   # Reduce batch size
+   batch_size = 4  # or lower
+   
+   # Use gradient checkpointing
+   torch.cuda.empty_cache()
+   ```
+
+2. **Model Loading Errors**
+   ```python
+   # Clear HuggingFace cache
+   from polytope.checkpoint_analysis import clear_hf_cache_for_revision
+   clear_hf_cache_for_revision(model_name, revision)
+   ```
+
+3. **Missing Spline Codes**
+   ```
+   WARNING: No spline codes available, using binary patterns only
+   ```
+   - This is expected for some model architectures
+   - Analysis will fall back to CETT-based binary patterns
+
+### Performance Tips
+
+- Use SSD storage for faster I/O
+- Enable mixed precision (FP16) for larger batch sizes
+- Use network storage for multi-node analysis
+- Monitor GPU utilization with `nvidia-smi`
 
 ## Citation
 
-For research using this analysis framework:
+If you use this pipeline in your research, please cite:
 
+```bibtex
+@misc{polytope_analysis_pipeline,
+  title={Polytope Superposition Analysis Pipeline},
+  author={Team AASA},
+  year={2024},
+  url={https://github.com/team-aasa/polytope-analysis}
+}
 ```
-Multi-Dimensional Superposition Analysis: Polytope Evolution 
-Across Neural Network Training Checkpoints
-```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Follow the coding standards in `OPTIMIZATION_GUIDE.md`
+4. Add tests for new functionality
+5. Submit a pull request
+
+## License
+
+MIT License - see `LICENSE` file for details.
+
+
+---
+
+**Research Focus**: This pipeline is designed for mechanistic interpretability research, specifically studying superposition phenomena in neural language models. It prioritizes research reproducibility and publication-quality analysis over production deployment.
