@@ -1,13 +1,13 @@
 [build-system]
-requires = ["flit_core >=3.2,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
-name = "superposition_timeline"
+name = "anonymized_submission"
 version = "0.0.1"
-description = "Temporal analysis of polysemantic neurons"
+description = "Research code for polysemanticity analyses (anonymized submission artifact)"
 authors = [
-  { name = "team-aasa" },
+  { name = "Anonymous" },
 ]
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -17,90 +17,75 @@ classifiers = [
 ]
 requires-python = "~=3.11.0"
 dependencies = [
-    # Core ML/AI libraries
-    "torch>=2.7.1",
-    "torchvision>=0.22.1",
-    "transformers>=4.53.2",
-    "transformers-stream-generator>=0.0.5",
-    "transformer-lens>=2.16.1",
+    # Core ML/AI libraries (used in codebase)
+    "torch>=2.2",
+    "transformers>=4.40",
     "nnsight>=0.4.11",
-    "diffusers>=0.34.0",
-    "accelerate>=1.9.0",
-    "safetensors>=0.5.3",
-    "tokenizers>=0.21.2",
-    "sentencepiece>=0.2.0",
-    
+
     # Data processing and analysis
-    "numpy>=1.26.4",
-    "pandas>=2.3.1",
-    "scipy>=1.16.0",
-    "scikit-learn>=1.7.0",
-    "datasets>=2.21.0",
-    "pyarrow>=20.0.0",
-    "hdbscan>=0.8.40",
-    "einops>=0.8.1",
-    "fancy-einsum>=0.0.3",
-    
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.11",
+    "datasets>=2.19",
+    "pyarrow>=14",
+
     # Visualization
-    "matplotlib>=3.10.3",
-    "matplotlib-inline>=0.1.7",
-    "seaborn>=0.13.2",
-    "plotly>=5.0.0",
-    
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+
     # Utilities and tools
-    "tqdm>=4.67.1",
-    "loguru>=0.7.3",
-    "typer>=0.12.3",
-    "rich>=14.0.0",
-    "wandb>=0.21.0",
-    "click>=8.2.1",
-    "pydantic>=2.11.7",
-    "pydantic_core>=2.33.2",
-    
-    # HTTP and networking
-    "requests>=2.32.4",
-    "aiohttp>=3.12.14",
-    "websocket-client>=1.8.0",
-    "simple-websocket>=1.1.0",
-    
-    # File handling and I/O
-    "fsspec>=2024.6.1",
-    "huggingface-hub>=0.33.4",
-    "hf-xet>=1.1.5",
-    "filelock>=3.18.0",
-    "pathlib>=1.0.1",
-    
-    # Development and testing
-    "pytest>=8.4.1",
-    "ipython>=9.4.0",
-    "jedi>=0.19.2",
-    "beartype>=0.14.1",
-    "typeguard>=4.4.4",
-    "typing-inspection>=0.4.1",
-    "typing_extensions>=4.14.1",
-    
-    # Additional dependencies
+    "tqdm>=4.66",
+    "loguru>=0.7",
+    "requests>=2.31",
+
+    # Hugging Face tooling
+    "huggingface-hub>=0.20",
+
+    # Tokengrams for n-gram indexing
     "tokengrams>=0.3.3",
-    "sympy>=1.14.0",
-    "networkx>=3.5",
-    "pillow>=11.3.0",
-    "protobuf>=6.31.1",
-    "psutil>=7.0.0",
-    "regex>=2024.11.6",
-    "xxhash>=3.5.0",
-    "yarl>=1.20.1",
-    "zipp>=3.23.0",
+
+    # Testing
+    "pytest>=8.0",
 ]
 
 [tool.ruff]
 line-length = 99
-src = ["superposition_timeline"]
-include = ["pyproject.toml", "superposition_timeline/**/*.py"]
+src = [
+  "ngrams",
+  "polytope",
+  "neuron_embeddings",
+  "jsd_polysemanticity"
+]
+include = [
+  "pyproject.toml",
+  "ngrams/**/*.py",
+  "polytope/**/*.py",
+  "neuron_embeddings/**/*.py",
+  "jsd_polysemanticity/**/*.py",
+  "tests/**/*.py"
+]
 
 [tool.ruff.lint]
 extend-select = ["I"]  # Add import sorting
 
 [tool.ruff.lint.isort]
-known-first-party = ["superposition_timeline"]
+known-first-party = [
+  "ngrams",
+  "polytope",
+  "neuron_embeddings",
+  "jsd_polysemanticity"
+]
 force-sort-within-sections = true
+
+[tool.setuptools.packages.find]
+include = [
+  "ngrams",
+  "ngrams.*",
+  "polytope",
+  "polytope.*",
+  "neuron_embeddings",
+  "neuron_embeddings.*",
+  "jsd_polysemanticity",
+  "jsd_polysemanticity.*"
+]
 

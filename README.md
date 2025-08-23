@@ -1,6 +1,6 @@
 # From Tokens to Semantics: The Emergence and Stabilization of Polysemanticity in Language Models
 
-This repository contains code and analysis pipelines for the paper "From Tokens to Semantics: The Emergence and Stabilization of Polysemanticity in Language Models."
+This repository contains research code and analysis pipelines for studying neural network behavior, particularly focusing on polysemanticity, superposition, and temporal dynamics in language models.
 
 ## Project Overview
 
@@ -22,7 +22,7 @@ The repository consists of several components:
 
 1. Clone the repository:
 ```bash
-git clone <team-aasa>
+git clone <anonymized>
 cd team-aasa
 ```
 
@@ -48,11 +48,11 @@ pip install -e .
 ```
 team-aasa/
 ├── neuron_embeddings/          # Neuron activation analysis
-├── jsd_polysemanticity/       # JSD and polysemanticity pipeline
-├── polytope/                  # Polytope analysis tools
-├── ngrams/                    # N-gram processing and analysis
-├── tests/                     # Test suite
-└── pyproject.toml            # Project configuration and dependencies
+├── jsd_polysemanticity/        # JSD and polysemanticity pipeline
+├── polytope/                   # Polytope analysis tools
+├── ngrams/                     # N-gram processing and analysis
+├── tests/                      # Test suite
+└── pyproject.toml              # Project configuration and dependencies
 ```
 
 ## Key Dependencies
@@ -76,6 +76,37 @@ main()
 ```
 
 ### Neuron Embeddings Analysis
+## Polytope Module
+
+The `polytope/` package implements the polytope-based superposition analysis used in the paper.
+
+```
+polytope/
+├── checkpoint_analysis.py      # Extract activations across checkpoints
+├── refined_polytope_analyzer.py# Core analysis and pipeline entrypoints
+├── visualization_utils.py      # Publication-grade figures (PDF/PNG)
+├── dataset_from_index.py       # Build datasets from n-gram indices
+└── ngram_dataset.py            # Utilities for templated n-gram datasets
+```
+
+Example end-to-end usage:
+
+```python
+from polytope.checkpoint_analysis import run_checkpoint_analysis_pipeline
+from polytope.refined_polytope_analyzer import run_polytope_analysis_pipeline
+
+checkpoint_file = run_checkpoint_analysis_pipeline(
+    model_name="EleutherAI/pythia-410m",
+    checkpoints=["1000", "10000", "50000"],
+    dataset_path="dataset.json",
+    output_dir="cache/checkpoint_analysis",
+)
+
+results_dir = run_polytope_analysis_pipeline(
+    checkpoint_file=checkpoint_file,
+    output_dir="results/polytope_analysis",
+)
+```
 
 ```python
 from neuron_embeddings.demo import run_analysis
@@ -113,6 +144,19 @@ uv sync
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+## Citation
+
+If you use this code in your research, please cite:
+
+```bibtex
+@software{team_aasa_research,
+  title={Team AASA Research Repository},
+  author={Team AASA},
+  year={2024},
+  url={https://github.com/your-org/team-aasa}
+}
+```
+
 ## Contact
 
-For questions or collaboration, please open an issue or contact the research team.
+For questions during review, please use the submission portal.

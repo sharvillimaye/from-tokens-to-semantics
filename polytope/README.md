@@ -1,4 +1,4 @@
-# Polytope Superposition Analysis Pipeline
+# Polytope Superposition Analysis Pipeline (Anonymized)
 
 A comprehensive research pipeline for analyzing superposition phenomena in Large Language Models (LLMs) through polytope density analysis and spline code extraction.
 
@@ -370,16 +370,7 @@ analyzer.run_full_analysis(
 
 ## Citation
 
-If you use this pipeline in your research, please cite:
-
-```bibtex
-@misc{polytope_analysis_pipeline,
-  title={Polytope Superposition Analysis Pipeline},
-  author={Team AASA},
-  year={2024},
-  url={https://github.com/team-aasa/polytope-analysis}
-}
-```
+To preserve anonymity for double-blind review, we omit citation and repository links here. The camera-ready will include full references.
 
 ## Contributing
 
