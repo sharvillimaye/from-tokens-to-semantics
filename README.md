@@ -75,7 +75,6 @@ from jsd_polysemanticity.pipeline import main
 main()
 ```
 
-### Neuron Embeddings Analysis
 ## Polytope Module
 
 The `polytope/` package implements the polytope-based superposition analysis used in the paper.
@@ -108,55 +107,6 @@ results_dir = run_polytope_analysis_pipeline(
 )
 ```
 
-```python
-from neuron_embeddings.demo import run_analysis
-
-# Run neuron embedding analysis
-run_analysis()
-```
-
-## Development
-
-### Running Tests
-
-```bash
-uv run pytest
-```
-
-### Code Quality
-
-The project uses [Ruff](https://docs.astral.sh/ruff/) for linting and formatting:
-
-```bash
-uv run ruff check .
-uv run ruff format .
-```
-
-### Adding Dependencies
-
-To add new dependencies, edit `pyproject.toml` and run:
-
-```bash
-uv sync
-```
-
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@software{team_aasa_research,
-  title={Team AASA Research Repository},
-  author={Team AASA},
-  year={2024},
-  url={https://github.com/your-org/team-aasa}
-}
-```
-
-## Contact
-
-For questions during review, please use the submission portal.
