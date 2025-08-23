@@ -42,10 +42,10 @@ def get_max_activation(url: str) -> float:
             return None
             
     except requests.RequestException as e:
-        print(f"❌ Error fetching {url}: {e}")
+        print(f"Error fetching {url}: {e}")
         return None
     except ValueError as e:
-        print(f"❌ Error parsing max activation from {url}: {e}")
+        print(f"Error parsing max activation from {url}: {e}")
         return None
 
 def scrape_model_activations(model_name: str, num_layers: int, neurons_per_layer: int) -> Dict[str, float]:
