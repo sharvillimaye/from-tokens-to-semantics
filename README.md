@@ -1,6 +1,6 @@
 # From Tokens to Semantics: The Emergence and Stabilization of Polysemanticity in Language Models
 
-This repository contains research code and analysis pipelines for studying neural network behavior, particularly focusing on polysemanticity, superposition, and temporal dynamics in language models.
+This repository contains code and analysis pipelines for the paper "From Tokens to Semantics: The Emergence and Stabilization of Polysemanticity in Language Models."
 
 ## Project Overview
 
