@@ -2,7 +2,6 @@
 """
 Script to run checkpoint analysis for every twentieth neuron in Layers 0-5 of Pythia-70M
 (or Layers 0-n of another model - you'll have to change lines 47 and 50 to reflect this)
-Now uses individual max activations scraped from Neuroscope for each neuron.
 """
 
 import subprocess
