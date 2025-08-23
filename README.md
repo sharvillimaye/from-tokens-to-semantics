@@ -1,4 +1,4 @@
-# Team AASA Research Repository
+# From Tokens to Semantics: The Emergence and Stabilization of Polysemanticity in Language Models
 
 This repository contains research code and analysis pipelines for studying neural network behavior, particularly focusing on polysemanticity, superposition, and temporal dynamics in language models.
 
