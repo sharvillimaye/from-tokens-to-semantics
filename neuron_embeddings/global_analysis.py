@@ -52,7 +52,7 @@ def run_checkpoint_analysis(layer, neuron, max_activations):
         "--ckpt_mode", "skip",
         "--start_step", "3000",
         "--skip_steps", "10000",
-        "--distance_threshold", "0.7",
+        "--distance_threshold", "0.75",
         "--peak_activation", str(peak_activation),
         "--max_examples", "100",
         "--batch_size", "4"
