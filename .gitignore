@@ -187,3 +187,5 @@ cython_debug/
 # Ignore generated caches and analysis outputs
 cache/
 
+*.tex
+*.bib
