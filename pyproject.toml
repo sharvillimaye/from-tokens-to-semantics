@@ -17,23 +17,79 @@ classifiers = [
 ]
 requires-python = "~=3.11.0"
 dependencies = [
-    "matplotlib>=3.10.3",
-    "nnsight>=0.4.11",
-    "numpy>=2.3.2",
-    "pandas>=2.3.1",
-    "pytest>=8.4.1",
-    "scikit-learn>=1.7.1",
-    "scipy>=1.16.1",
-    "seaborn>=0.13.2",
+    # Core ML/AI libraries
     "torch>=2.7.1",
-    "tqdm>=4.67.1",
-    "transformer-lens>=2.15.4",
-    "transformers>=4.54.0",
-    "tokengrams>=0.3.3",
+    "torchvision>=0.22.1",
+    "transformers>=4.53.2",
+    "transformers-stream-generator>=0.0.5",
+    "transformer-lens>=2.16.1",
+    "nnsight>=0.4.11",
+    "diffusers>=0.34.0",
+    "accelerate>=1.9.0",
+    "safetensors>=0.5.3",
+    "tokenizers>=0.21.2",
+    "sentencepiece>=0.2.0",
+    
+    # Data processing and analysis
+    "numpy>=1.26.4",
+    "pandas>=2.3.1",
+    "scipy>=1.16.0",
+    "scikit-learn>=1.7.0",
+    "datasets>=2.21.0",
+    "pyarrow>=20.0.0",
     "hdbscan>=0.8.40",
+    "einops>=0.8.1",
+    "fancy-einsum>=0.0.3",
+    
+    # Visualization
+    "matplotlib>=3.10.3",
+    "matplotlib-inline>=0.1.7",
+    "seaborn>=0.13.2",
+    "plotly>=5.0.0",
+    
+    # Utilities and tools
+    "tqdm>=4.67.1",
     "loguru>=0.7.3",
     "typer>=0.12.3",
-    "datasets>=2.19.0",
+    "rich>=14.0.0",
+    "wandb>=0.21.0",
+    "click>=8.2.1",
+    "pydantic>=2.11.7",
+    "pydantic_core>=2.33.2",
+    
+    # HTTP and networking
+    "requests>=2.32.4",
+    "aiohttp>=3.12.14",
+    "websocket-client>=1.8.0",
+    "simple-websocket>=1.1.0",
+    
+    # File handling and I/O
+    "fsspec>=2024.6.1",
+    "huggingface-hub>=0.33.4",
+    "hf-xet>=1.1.5",
+    "filelock>=3.18.0",
+    "pathlib>=1.0.1",
+    
+    # Development and testing
+    "pytest>=8.4.1",
+    "ipython>=9.4.0",
+    "jedi>=0.19.2",
+    "beartype>=0.14.1",
+    "typeguard>=4.4.4",
+    "typing-inspection>=0.4.1",
+    "typing_extensions>=4.14.1",
+    
+    # Additional dependencies
+    "tokengrams>=0.3.3",
+    "sympy>=1.14.0",
+    "networkx>=3.5",
+    "pillow>=11.3.0",
+    "protobuf>=6.31.1",
+    "psutil>=7.0.0",
+    "regex>=2024.11.6",
+    "xxhash>=3.5.0",
+    "yarl>=1.20.1",
+    "zipp>=3.23.0",
 ]
 
 [tool.ruff]
