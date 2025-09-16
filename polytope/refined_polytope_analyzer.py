@@ -91,25 +91,51 @@ class RefinedPolytopeAnalyzer:
         """Z-score features to stabilize Euclidean distance computations with overflow protection.
         Does not mutate the original array. Returns float64 array.
         """
-        # Clip extreme values before conversion to prevent overflow
-        X = np.clip(activations, -1e6, 1e6).astype(np.float64, copy=False)
+        # Handle extreme values more carefully to prevent overflow
+        # First check for inf/nan and replace with manageable values
+        activations_clean = np.where(np.isfinite(activations), activations, 0.0)
         
-        mean = np.mean(X, axis=0)
-        std = np.std(X, axis=0)
-        std = np.where(std < eps, 1.0, std)
+        # Use more conservative clipping bounds to prevent overflow in subsequent operations
+        clip_bound = 1e3  # Much more conservative than 1e6
+        X = np.clip(activations_clean, -clip_bound, clip_bound)
         
-        # Perform z-scoring with additional clipping
-        z_scored = (X - mean) / std
+        # Convert to float64 after clipping to avoid cast overflow
+        X = X.astype(np.float64, copy=False)
         
-        # Final clipping to prevent extreme standardized values
-        return np.clip(z_scored, -10, 10)
+        # Compute mean and std with overflow protection
+        with np.errstate(over='ignore', invalid='ignore'):
+            mean = np.mean(X, axis=0)
+            std = np.std(X, axis=0)
+        
+        # Replace inf/nan in stats with safe values
+        mean = np.where(np.isfinite(mean), mean, 0.0)
+        std = np.where(np.isfinite(std) & (std >= eps), std, 1.0)
+        
+        # Perform z-scoring with additional overflow protection
+        with np.errstate(over='ignore', invalid='ignore'):
+            z_scored = (X - mean) / std
+        
+        # Final clipping to prevent extreme standardized values and handle any remaining inf/nan
+        z_scored = np.where(np.isfinite(z_scored), z_scored, 0.0)
+        return np.clip(z_scored, -6, 6)  # More conservative than -10,10
 
     def _rowwise_norm(self, X: np.ndarray) -> np.ndarray:
         """Compute row-wise L2 norms with clipping to avoid overflow."""
-        X64 = X.astype(np.float64, copy=False)
-        # Clip extreme values to prevent overflow in squares
-        X64 = np.clip(X64, -1e6, 1e6)
-        return np.sqrt(np.sum(X64 * X64, axis=1))
+        # Handle inf/nan values first
+        X_clean = np.where(np.isfinite(X), X, 0.0)
+        
+        # Convert to float64 and use conservative clipping
+        X64 = X_clean.astype(np.float64, copy=False)
+        X64 = np.clip(X64, -1e3, 1e3)  # More conservative clipping
+        
+        # Compute norms with overflow protection
+        with np.errstate(over='ignore', invalid='ignore'):
+            norms_squared = np.sum(X64 * X64, axis=1)
+            norms = np.sqrt(norms_squared)
+        
+        # Handle any remaining inf/nan in the result
+        norms = np.where(np.isfinite(norms), norms, 0.0)
+        return norms
 
     def load_checkpoint_data(self, checkpoint_path: str, stream_processing: bool = True, 
                             chunk_size: int = 1000) -> Dict[str, Any]:
@@ -240,6 +266,9 @@ class RefinedPolytopeAnalyzer:
             binary_patterns.append(r['binary_pattern'])
         
         # Convert to arrays, handling missing spline codes
+        spline_available_count = sum(1 for sc in spline_codes if sc is not None)
+        logger.info(f"Spline code availability: {spline_available_count}/{len(spline_codes)} records have spline codes")
+        
         if any(sc is not None for sc in spline_codes):
             # Use spline codes where available, pad where missing
             valid_spline = [sc for sc in spline_codes if sc is not None]
@@ -247,7 +276,7 @@ class RefinedPolytopeAnalyzer:
                 # Get dimensions from valid spline codes
                 spline_matrix = []
                 
-                for sc in spline_codes:
+                for i, sc in enumerate(spline_codes):
                     if sc is not None:
                         # Ensure compatibility with activation dimensions
                         if len(sc) > activations.shape[1]:
@@ -258,7 +287,7 @@ class RefinedPolytopeAnalyzer:
                         spline_matrix.append(sc)
                     else:
                         # Use binary pattern as fallback
-                        bp = binary_patterns[len(spline_matrix)]
+                        bp = binary_patterns[i]  # Use correct index
                         if len(bp) > activations.shape[1]:
                             bp = bp[:activations.shape[1]]
                         elif len(bp) < activations.shape[1]:
@@ -266,9 +295,14 @@ class RefinedPolytopeAnalyzer:
                         spline_matrix.append(bp)
                 
                 spline_codes_array = np.stack(spline_matrix)
+                logger.info(f"Created hybrid spline/binary matrix: {spline_codes_array.shape}")
             else:
                 spline_codes_array = None
         else:
+            logger.warning("No spline codes available in any records - check pre-activation extraction")
+            # Debug: Check if records have pre_activation_vector
+            pre_act_count = sum(1 for r in records if r.get('pre_activation_vector') is not None)
+            logger.info(f"Records with pre_activation_vector: {pre_act_count}/{len(records)}")
             spline_codes_array = None
         
         # Binary patterns array
@@ -403,15 +437,20 @@ class RefinedPolytopeAnalyzer:
     def compute_participation_ratio(self, activations: np.ndarray) -> float:
         """Compute participation ratio (effective dimensionality) with robust numerical handling."""
         try:
-            # Clip extreme values before standardization to prevent overflow
-            activations_clipped = np.clip(activations, -1e6, 1e6)
+            # Handle inf/nan values first
+            activations_clean = np.where(np.isfinite(activations), activations, 0.0)
             
-            # Standardize activations
-            scaler = StandardScaler()
-            activations_std = scaler.fit_transform(activations_clipped)
+            # Use more conservative clipping to prevent overflow
+            activations_clipped = np.clip(activations_clean, -1e3, 1e3)
             
-            # Additional clipping after standardization
-            activations_std = np.clip(activations_std, -10, 10)
+            # Standardize activations with overflow protection
+            with np.errstate(over='ignore', invalid='ignore'):
+                scaler = StandardScaler()
+                activations_std = scaler.fit_transform(activations_clipped)
+            
+            # Handle any inf/nan from standardization
+            activations_std = np.where(np.isfinite(activations_std), activations_std, 0.0)
+            activations_std = np.clip(activations_std, -6, 6)  # Conservative clipping
             
             # PCA with error handling
             pca = PCA()
@@ -419,18 +458,24 @@ class RefinedPolytopeAnalyzer:
             
             # Participation ratio from eigenvalue spectrum with numerical safeguards
             eigenvals = pca.explained_variance_
+            eigenvals = np.where(np.isfinite(eigenvals), eigenvals, 0.0)
             eigenvals = np.maximum(eigenvals, 1e-12)  # Avoid division by zero
             
-            numerator = np.sum(eigenvals) ** 2
-            denominator = np.sum(eigenvals ** 2)
+            with np.errstate(over='ignore', invalid='ignore'):
+                numerator = np.sum(eigenvals) ** 2
+                denominator = np.sum(eigenvals ** 2)
             
-            # Prevent overflow in the calculation
-            if denominator < 1e-12:
-                return 1.0  # Default to 1 if calculation is unstable
+            # Check for overflow/invalid results
+            if not np.isfinite(numerator) or not np.isfinite(denominator) or denominator < 1e-12:
+                logger.warning("Participation ratio calculation unstable, returning default")
+                return 1.0
                 
             participation_ratio = numerator / denominator
             
-            # Ensure result is reasonable
+            # Ensure result is reasonable and finite
+            if not np.isfinite(participation_ratio):
+                return 1.0
+                
             participation_ratio = np.clip(participation_ratio, 1.0, float(len(eigenvals)))
             
             return float(participation_ratio)
@@ -1880,3 +1925,4 @@ if __name__ == "__main__":
     checkpoint_file = "/workspace/cache/activation_records_70m.pkl"
     results_dir = run_polytope_analysis_pipeline(checkpoint_file)
     print(f"Analysis complete. Results saved to: {results_dir}")
+
