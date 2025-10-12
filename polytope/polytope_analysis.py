@@ -280,13 +280,41 @@ def bootstrap_resample(records: List[Dict[str, Any]], n_bootstrap: int = 100,
     
     return bootstrap_samples
 
+def _bootstrap_iteration(args):
+    """Single bootstrap iteration for parallel processing.
+    
+    Args:
+        args: Tuple of (activations, patterns, indices, max_pairs)
+    
+    Returns:
+        Tuple of (density_estimate, pr_estimate) or (None, None) on failure
+    """
+    activations, patterns, indices, max_pairs = args
+    try:
+        boot_activations = activations[indices]
+        boot_patterns = patterns[indices]
+        
+        # Compute density
+        density_result = compute_polytope_density(boot_activations, boot_patterns, max_pairs=max_pairs)
+        density_estimate = density_result['density_mean']
+        
+        # Compute participation ratio
+        pr_estimate = compute_participation_ratio(boot_activations)
+        
+        return (density_estimate, pr_estimate)
+    except Exception as e:
+        logger.debug(f"Bootstrap iteration failed: {e}")
+        return (None, None)
+
+
 def compute_metrics_with_confidence_intervals(
     activations: np.ndarray, 
     patterns: np.ndarray,
     n_bootstrap: int = 100,
     confidence_level: float = 0.95,
     max_pairs: int = 5000,
-    random_seed: Optional[int] = None
+    random_seed: Optional[int] = None,
+    n_workers: Optional[int] = None
 ) -> Dict[str, Any]:
     """Compute polytope and participation metrics with confidence intervals using bootstrap.
     
@@ -297,6 +325,7 @@ def compute_metrics_with_confidence_intervals(
         confidence_level: Confidence level for intervals (e.g., 0.95 for 95% CI)
         max_pairs: Maximum pairs for density computation
         random_seed: Random seed for reproducibility
+        n_workers: Number of parallel workers (default: min(n_bootstrap, cpu_count))
         
     Returns:
         Dictionary containing:
@@ -309,26 +338,38 @@ def compute_metrics_with_confidence_intervals(
         np.random.seed(random_seed)
     
     n_samples = len(activations)
+    sample_size = max(10, int(n_samples * 0.8))  # Use 80% of data for each bootstrap
     
-    # Collect bootstrap estimates
+    # Generate all bootstrap indices upfront for reproducibility
+    bootstrap_indices = [
+        np.random.choice(n_samples, size=sample_size, replace=True)
+        for _ in range(n_bootstrap)
+    ]
+    
+    # Prepare arguments for parallel processing
+    args_list = [
+        (activations, patterns, indices, max_pairs)
+        for indices in bootstrap_indices
+    ]
+    
+    # Determine number of workers
+    if n_workers is None:
+        n_workers = min(n_bootstrap, mp.cpu_count())
+    
+    # Run bootstrap iterations in parallel using ThreadPoolExecutor
     density_estimates = []
     pr_estimates = []
     
-    sample_size = max(10, int(n_samples * 0.8))  # Use 80% of data for each bootstrap
+    logger.debug(f"Running {n_bootstrap} bootstrap iterations with {n_workers} workers")
     
-    for i in range(n_bootstrap):            # Resample with replacement
-        indices = np.random.choice(n_samples, size=sample_size, replace=True)
-        boot_activations = activations[indices]
-        boot_patterns = patterns[indices]
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = [executor.submit(_bootstrap_iteration, args) for args in args_list]
         
-        # Compute density
-        density_result = compute_polytope_density(boot_activations, boot_patterns, max_pairs=max_pairs)
-        density_estimates.append(density_result['density_mean'])
-        
-        # Compute participation ratio
-        pr = compute_participation_ratio(boot_activations)
-        pr_estimates.append(pr)
-            
+        for future in as_completed(futures):
+            density_est, pr_est = future.result()
+            if density_est is not None and pr_est is not None:
+                density_estimates.append(density_est)
+                pr_estimates.append(pr_est)
     
     # Convert to arrays
     density_estimates = np.array(density_estimates)
@@ -380,7 +421,9 @@ def polytope_analysis(
     n_bootstrap: int = 100,
     confidence_level: float = 0.95,
     max_pairs: int = 5000,
-    random_seed: Optional[int] = None
+    random_seed: Optional[int] = None,
+    n_workers: Optional[int] = None,
+    parallel_checkpoints: bool = False
 ) -> Dict[str, Any]:
     """Run polytope analysis with statistical robustness on checkpoint data.
     
@@ -393,6 +436,8 @@ def polytope_analysis(
         confidence_level: Confidence level for intervals (default 0.95 for 95% CI)
         max_pairs: Maximum number of pairs for density computation
         random_seed: Random seed for reproducibility
+        n_workers: Number of parallel workers for bootstrap (default: auto-detect)
+        parallel_checkpoints: If True, process checkpoints in parallel (default: False)
         
     Returns:
         Dictionary with structure:
@@ -421,12 +466,17 @@ def polytope_analysis(
                 'confidence_level': float,
                 'total_records': int,
                 'n_checkpoints': int,
-                'random_seed': int
+                'random_seed': int,
+                'n_workers': int
             }
         }
     """
     logger.info(f"Starting polytope analysis with {n_bootstrap} bootstrap iterations")
     logger.info(f"Confidence level: {confidence_level}, max_pairs: {max_pairs}")
+    
+    if n_workers is None:
+        n_workers = min(n_bootstrap, mp.cpu_count())
+    logger.info(f"Using {n_workers} parallel workers for bootstrap iterations")
     
     # Load data
     try:
@@ -469,7 +519,8 @@ def polytope_analysis(
                     n_bootstrap=n_bootstrap,
                     confidence_level=confidence_level,
                     max_pairs=max_pairs,
-                    random_seed=random_seed
+                    random_seed=random_seed,
+                    n_workers=n_workers
                 )
                 
                 results[checkpoint][layer][freq_type] = metrics
@@ -486,6 +537,8 @@ def polytope_analysis(
         'n_checkpoints': len(results),
         'checkpoints': sorted(results.keys()),
         'random_seed': random_seed,
+        'n_workers': n_workers,
+        'parallel_checkpoints': parallel_checkpoints,
         'input_metadata': input_metadata
     }
     
@@ -495,4 +548,225 @@ def polytope_analysis(
         'results': results,
         'metadata': metadata
     }
+    
+
+def _setup_presentation_style():
+    """Configure matplotlib and seaborn for PowerPoint presentation-quality plots."""
+    palette = sns.color_palette("Paired", n_colors=20)
+    sns.set_theme(style="whitegrid", font_scale=1.35, palette="tab10")
+    
+    # Configure matplotlib style for presentations
+    plt.rcParams["lines.solid_capstyle"] = "projecting"
+    plt.rcParams["axes.unicode_minus"] = False
+    plt.rcParams["font.family"] = "sans-serif"  # Fallback if XCharter not available
+    plt.rcParams["font.size"] = 14
+    plt.rcParams["font.weight"] = "semibold"
+    plt.rcParams["axes.titleweight"] = "semibold"
+    plt.rcParams["axes.labelweight"] = "semibold"
+    plt.rcParams["axes.linewidth"] = 2.2
+    plt.rcParams["xtick.major.width"] = 2.0
+    plt.rcParams["ytick.major.width"] = 2.0
+    plt.rcParams["xtick.minor.width"] = 1.6
+    plt.rcParams["ytick.minor.width"] = 1.6
+    
+    return palette
+
+
+def _style_ax(ax, xlabel="X Axis", ylabel="Y Axis", title=None):
+    """Apply consistent styling to axes for presentation-quality plots."""
+    ax.grid(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    
+    # Darker, thicker spines for projection
+    for s in ax.spines.values():
+        s.set_color("black")
+        s.set_linewidth(2.2)
+    
+    # Larger ticks for PowerPoint
+    ax.tick_params(axis="both", which="major", pad=0, colors="0.4",
+                   labelsize=14, length=8, width=2.0)
+    ax.tick_params(axis="both", which="minor", length=5, width=1.6)
+    
+    # Axis labels
+    ax.set_xlabel(xlabel, fontsize=16, labelpad=8, weight="semibold")
+    ax.set_ylabel(ylabel, fontsize=16, labelpad=8, weight="semibold")
+    
+    # Optional title
+    if title:
+        ax.set_title(title, fontsize=18, weight="semibold", pad=15)
+
+
+def polytope_graphs(results: Dict[str, Any], output_dir: str = "polytope_graphs") -> None:
+    """Generate graphs for polytope analysis.
+    Graphs:
+    Difference heatmap (including error bars, CI, etc.)
+    layerwise charts comparing participation ratio vs checkpoints, density vs checkpoints (including error bars, CI, etc.)
+    """
+    from pathlib import Path
+    
+    # Setup presentation styling
+    palette = _setup_presentation_style()
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Extract data from results
+    analysis_results = results.get('results', {})
+    if not analysis_results:
+        logger.error("No analysis results found")
+        return
+    
+    # Parse results into structured format
+    checkpoints = sorted(analysis_results.keys())
+    layers = sorted(next(iter(analysis_results.values())).keys())
+    
+    logger.info(f"Creating visualizations for {len(checkpoints)} checkpoints and {len(layers)} layers")
+    
+    # Create visualizations
+    _plot_difference_heatmaps(analysis_results, checkpoints, layers, output_path, palette)
+    _plot_layerwise_metrics(analysis_results, checkpoints, layers, output_path, palette)
+    
+    logger.info(f"Visualizations saved to {output_path}")
+
+
+def _plot_difference_heatmaps(analysis_results: Dict, checkpoints: List, layers: List, 
+                              output_path: Path, palette) -> None:
+    """Create heatmaps showing difference between high_freq and low_freq groups."""
+    metrics = [
+        ('density_mean', 'Polytope Density Difference (High - Low)'),
+        ('participation_ratio_mean', 'Participation Ratio Difference (High - Low)')
+    ]
+    
+    for metric_key, title in metrics:
+        # Build difference matrix: layers x checkpoints
+        diff_matrix = np.zeros((len(layers), len(checkpoints)))
+        
+        for i, layer in enumerate(layers):
+            for j, checkpoint in enumerate(checkpoints):
+                high_val = analysis_results[checkpoint][layer]['high_freq'].get(metric_key, 0)
+                low_val = analysis_results[checkpoint][layer]['low_freq'].get(metric_key, 0)
+                diff_matrix[i, j] = high_val - low_val
+        
+        # Create heatmap with 16:9 aspect ratio for presentations
+        fig, ax = plt.subplots(figsize=(11.5, 6.46875))
+        
+        # Use diverging colormap centered at 0
+        vmax = np.abs(diff_matrix).max()
+        vmin = -vmax
+        
+        im = ax.imshow(diff_matrix, aspect='auto', cmap='coolwarm', 
+                      vmin=vmin, vmax=vmax, origin='lower')
+        
+        # Apply presentation styling
+        _style_ax(ax, xlabel='Checkpoint', ylabel='Layer', title=title)
+        
+        # Set ticks with presentation-friendly sizes
+        if len(checkpoints) > 10:
+            step = max(1, len(checkpoints) // 10)
+            xticks_idx = list(range(0, len(checkpoints), step))
+        else:
+            xticks_idx = list(range(len(checkpoints)))
+        ax.set_xticks(xticks_idx)
+        ax.set_xticklabels([str(checkpoints[i]) for i in xticks_idx], 
+                          rotation=45, ha='right', fontsize=14, weight='semibold')
+        
+        if len(layers) > 15:
+            step = max(1, len(layers) // 15)
+            yticks_idx = list(range(0, len(layers), step))
+        else:
+            yticks_idx = list(range(len(layers)))
+        ax.set_yticks(yticks_idx)
+        ax.set_yticklabels([str(layers[i]) for i in yticks_idx], fontsize=14, weight='semibold')
+        
+        # Add colorbar with larger font
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Difference', fontsize=16, weight='semibold')
+        cbar.ax.tick_params(labelsize=14)
+        
+        plt.tight_layout()
+        filename = metric_key.replace('_mean', '') + '_difference_heatmap.pdf'
+        plt.savefig(output_path / filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"Saved {filename}")
+
+
+def _plot_layerwise_metrics(analysis_results: Dict, checkpoints: List, layers: List, 
+                            output_path: Path, palette) -> None:
+    """Create layerwise line charts comparing metrics across checkpoints with error bars."""
+    metrics = [
+        ('density_mean', 'density_std', 'Polytope Density'),
+        ('participation_ratio_mean', 'participation_ratio_std', 'Participation Ratio')
+    ]
+    
+    # Use presentation-friendly colors from palette
+    colors = {'high_freq': palette[0], 'low_freq': palette[2]}
+    markers = {'high_freq': 'o', 'low_freq': 's'}
+    
+    # Select representative layers to avoid clutter
+    max_layers_to_plot = 6
+    if len(layers) > max_layers_to_plot:
+        layer_indices = np.linspace(0, len(layers) - 1, max_layers_to_plot, dtype=int)
+        selected_layers = [layers[i] for i in layer_indices]
+    else:
+        selected_layers = layers
+    
+    for metric_mean, metric_std, title in metrics:
+        # Create subplot for each layer
+        n_layers = len(selected_layers)
+        ncols = min(3, n_layers)
+        nrows = int(np.ceil(n_layers / ncols))
+        
+        # Scale figure size with 16:9 aspect ratio consideration
+        fig, axes = plt.subplots(nrows, ncols, figsize=(5.5 * ncols, 3.5 * nrows))
+        if n_layers == 1:
+            axes = np.array([axes])
+        axes = axes.flatten() if n_layers > 1 else axes
+        
+        for idx, layer in enumerate(selected_layers):
+            ax = axes[idx] if n_layers > 1 else axes[0]
+            
+            for freq_type in ['high_freq', 'low_freq']:
+                means = []
+                stds = []
+                valid_checkpoints = []
+                
+                for checkpoint in checkpoints:
+                    metrics_data = analysis_results[checkpoint][layer][freq_type]
+                    means.append(metrics_data.get(metric_mean, 0))
+                    stds.append(metrics_data.get(metric_std, 0))
+                    valid_checkpoints.append(checkpoint)
+                
+                means = np.array(means)
+                stds = np.array(stds)
+                
+                # Plot with presentation-quality thick lines
+                color = colors[freq_type]
+                marker = markers[freq_type]
+                label = freq_type.replace('_', ' ').title()
+                
+                ax.plot(valid_checkpoints, means, marker=marker, color=color, 
+                       linewidth=4.8, markersize=10, label=label, alpha=0.98)
+                ax.fill_between(valid_checkpoints, means - stds, means + stds, 
+                               color=color, alpha=0.25)
+            
+            # Apply presentation styling to each subplot
+            _style_ax(ax, xlabel='Checkpoint', ylabel=title, title=f'Layer {layer}')
+            
+            # Legend with larger font for presentations
+            leg = ax.legend(frameon=False, fontsize=14, loc='best', 
+                          handlelength=3.8, borderaxespad=1.0)
+        
+        # Remove unused subplots
+        for idx in range(n_layers, len(axes)):
+            fig.delaxes(axes[idx])
+        
+        plt.tight_layout()
+        filename = metric_mean.replace('_mean', '') + '_layerwise_comparison.pdf'
+        plt.savefig(output_path / filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"Saved {filename}")
+    
     

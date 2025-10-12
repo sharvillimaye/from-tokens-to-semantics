@@ -498,43 +498,7 @@ Reference figures using \\ref{{fig:label_name}} in your text.
         self._save_figure(output_path, 'cross_layer_participation_comparison')
         
         logger.info("Created cross-layer comparison visualizations")
-    
-    def _plot_legacy_evolution(self, df: pd.DataFrame, output_path: Path) -> None:
-        """Plot legacy evolution (averaged across layers)."""
-        fig, axes = plt.subplots(2, 2, figsize=(15 * self.figsize_scale, 10 * self.figsize_scale))
-        # Removed overall figure title for cleaner PDF
-        
-        metrics = [
-            ('density_mean', 'Polytope Density'),
-            ('participation_ratio', 'Participation Ratio'),
-            ('sparsity', 'Sparsity'),
-            ('activation_norm', 'Activation Norm')
-        ]
-        
-        for idx, (metric, title) in enumerate(metrics):
-            ax = axes[idx // 2, idx % 2]
-            
-            for group in ['high_freq', 'low_freq']:
-                group_data = df[df['group'] == group].sort_values('checkpoint')
-                if not group_data.empty:
-                    color = self.colors[group]
-                    marker = self.markers[group]
-                    ax.plot(group_data['checkpoint'], group_data[metric],
-                           marker=marker, color=color, linewidth=2, markersize=8,
-                           label=group.replace('_', ' ').title() + ' N-grams')
-            
-            ax.set_xlabel('Training Checkpoint')
-            ax.set_ylabel(title)
-            # No per-axis title for cleaner PDF
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        self._save_figure(output_path, 'polytope_evolution_legacy')
 
-    # Removed unused individual plot helpers to reduce code surface area
-    
-    # Removed combined 3-panel figure in favor of simpler, clearer figures
 
     # ===== New: NeurIPS-quality checkpoint evolution visuals =====
     def _prepare_grid(self, df: pd.DataFrame, metric: str, group: str):
