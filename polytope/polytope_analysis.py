@@ -1,23 +1,15 @@
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-import gc
-import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing as mp
 from pathlib import Path
 import pickle
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import warnings
 from collections import defaultdict
 from loguru import logger
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import seaborn as sns
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-
-from hdbscan import HDBSCAN  
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
