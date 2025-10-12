@@ -89,35 +89,27 @@ class RefinedPolytopeAnalyzer:
     # ---------------------------
     def _zscore_for_distance(self, activations: np.ndarray, eps: float = 1e-12) -> np.ndarray:
         """Z-score features to stabilize Euclidean distance computations with overflow protection.
-        Does not mutate the original array. Returns float64 array.
         """
-        # Handle extreme values more carefully to prevent overflow
-        # First check for inf/nan and replace with manageable values
         activations_clean = np.where(np.isfinite(activations), activations, 0.0)
         
         # Use more conservative clipping bounds to prevent overflow in subsequent operations
-        clip_bound = 1e3  # Much more conservative than 1e6
+        clip_bound = 1e3  
         X = np.clip(activations_clean, -clip_bound, clip_bound)
         
-        # Convert to float64 after clipping to avoid cast overflow
         X = X.astype(np.float64, copy=False)
         
-        # Compute mean and std with overflow protection
         with np.errstate(over='ignore', invalid='ignore'):
             mean = np.mean(X, axis=0)
             std = np.std(X, axis=0)
         
-        # Replace inf/nan in stats with safe values
         mean = np.where(np.isfinite(mean), mean, 0.0)
         std = np.where(np.isfinite(std) & (std >= eps), std, 1.0)
         
-        # Perform z-scoring with additional overflow protection
         with np.errstate(over='ignore', invalid='ignore'):
             z_scored = (X - mean) / std
         
-        # Final clipping to prevent extreme standardized values and handle any remaining inf/nan
         z_scored = np.where(np.isfinite(z_scored), z_scored, 0.0)
-        return np.clip(z_scored, -6, 6)  # More conservative than -10,10
+        return np.clip(z_scored, -6, 6)  
 
     def _rowwise_norm(self, X: np.ndarray) -> np.ndarray:
         """Compute row-wise L2 norms with clipping to avoid overflow."""
@@ -137,15 +129,12 @@ class RefinedPolytopeAnalyzer:
         norms = np.where(np.isfinite(norms), norms, 0.0)
         return norms
 
-    def load_checkpoint_data(self, checkpoint_path: str, stream_processing: bool = True, 
+    def load_checkpoint_data(self, checkpoint_path: str, stream_processing: bool = False, 
                             chunk_size: int = 1000) -> Dict[str, Any]:
         """Load checkpoint analysis results with optional streaming for memory efficiency."""
         logger.info(f"Loading checkpoint data from {checkpoint_path}")
         
-        if stream_processing:
-            return self._load_checkpoint_data_streaming(checkpoint_path, chunk_size)
-        else:
-            return self._load_checkpoint_data_full(checkpoint_path)
+        return self._load_checkpoint_data_full(checkpoint_path)
     
     def _load_checkpoint_data_full(self, checkpoint_path: str) -> Dict[str, Any]:
         """Load full checkpoint data into memory (legacy method)."""
@@ -164,29 +153,6 @@ class RefinedPolytopeAnalyzer:
         logger.info(f"Metadata: {metadata}")
         
         return {'records': records, 'metadata': metadata}
-    
-    def _load_checkpoint_data_streaming(self, checkpoint_path: str, chunk_size: int) -> Dict[str, Any]:
-        """Load checkpoint data with streaming to manage memory usage."""
-        # First pass: read metadata and count records
-        with open(checkpoint_path, 'rb') as f:
-            data = pickle.load(f)
-        
-        if isinstance(data, dict) and 'records' in data:
-            records = data['records']
-            metadata = data.get('metadata', {})
-        else:
-            records = data
-            metadata = {}
-        
-        logger.info(f"Loaded {len(records)} activation records with streaming support (chunk_size={chunk_size})")
-        logger.info(f"Metadata: {metadata}")
-        
-        # For now, still return full data but with garbage collection
-        # In production, this could be enhanced with actual streaming processing
-        # where records are processed in chunks of size 'chunk_size'
-        gc.collect()
-        
-        return {'records': records, 'metadata': metadata, 'streaming_enabled': True, 'chunk_size': chunk_size}
 
     def organize_by_frequency(self, records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """Organize records by frequency category (legacy method - use organize_by_layer_and_frequency for layer-aware analysis)."""
@@ -749,98 +715,6 @@ class RefinedPolytopeAnalyzer:
         else:
             return self._analyze_checkpoint_legacy(records, checkpoint_step)
     
-    def _analyze_checkpoint_legacy(self, records: List[Dict[str, Any]], checkpoint_step: str) -> Dict[str, Any]:
-        """Legacy analysis method that averages across layers (kept for backward compatibility)."""
-        # Organize by frequency (ignoring layers)
-        freq_groups = self.organize_by_frequency(records)
-        
-        # Focus on high vs low frequency comparison
-        high_freq_records = freq_groups['high_freq']
-        low_freq_records = freq_groups['low_freq']
-        
-        if not high_freq_records or not low_freq_records:
-            logger.warning(f"Missing frequency groups in checkpoint {checkpoint_step}")
-            return {'error': 'Missing frequency groups'}
-        
-        # Extract matrices
-        high_matrices = self.extract_analysis_matrices(high_freq_records)
-        low_matrices = self.extract_analysis_matrices(low_freq_records)
-        
-        results = {
-            'checkpoint_step': checkpoint_step,
-            'n_high_freq': len(high_freq_records),
-            'n_low_freq': len(low_freq_records),
-            'analysis_type': 'legacy_layer_averaged'
-        }
-        
-        # Compute metrics for each frequency group (averaged across layers)
-        for freq_type, matrices in [('high_freq', high_matrices), ('low_freq', low_matrices)]:
-            if not matrices:
-                continue
-                
-            activations = matrices['activations']
-            patterns = matrices.get('spline_codes', matrices['binary_patterns'])
-            
-            density_metrics = self.compute_polytope_density(activations, patterns, max_pairs=self.max_pairs)
-            results[f'{freq_type}_density'] = density_metrics
-            
-            # Fixed pattern reuse calculation - detects actual reuse
-            unique_patterns, counts = np.unique(patterns, axis=0, return_counts=True)
-            total_patterns = len(patterns)
-            unique_pattern_count = len(unique_patterns)
-            
-            # Pattern reuse rate: fraction of patterns that are reused (appear >1 time)
-            reused_patterns = np.sum(counts > 1)  # Count patterns appearing multiple times
-            pattern_reuse_rate = float(reused_patterns / unique_pattern_count) if unique_pattern_count > 0 else 0.0
-            
-            # Additional metric: pattern compression ratio
-            compression_ratio = float(unique_pattern_count / total_patterns) if total_patterns > 0 else 1.0
-            
-            results[f'{freq_type}_unique_polytopes'] = unique_pattern_count
-            results[f'{freq_type}_compression_ratio'] = compression_ratio
-            results[f'{freq_type}_pattern_reuse_rate'] = pattern_reuse_rate
-            results[f'{freq_type}_participation_ratio'] = self.compute_participation_ratio(activations)
-            results[f'{freq_type}_sparsity'] = float(np.mean(np.sum(patterns, axis=1) / patterns.shape[1]))
-            results[f'{freq_type}_activation_norm'] = float(np.mean(self._rowwise_norm(activations)))
-            
-            # Compute n-gram to polytope mapping metrics (prefer spline codes, fallback to binary patterns)
-            pattern_matrix = matrices.get('spline_codes', matrices['binary_patterns'])
-            mapping_metrics = self.compute_ngram_polytope_mapping_metrics(pattern_matrix, 
-                high_freq_records if freq_type == 'high_freq' else low_freq_records)
-            results[f'{freq_type}_mapping_metrics'] = mapping_metrics
-            
-            # Keep legacy spline metrics for backward compatibility
-            if 'spline_codes' in matrices:
-                spline_metrics = self.compute_spline_code_metrics(matrices['spline_codes'], 
-                    high_freq_records if freq_type == 'high_freq' else low_freq_records)
-                results[f'{freq_type}_spline_metrics'] = spline_metrics
-        
-        # Cross-group analysis
-        if high_matrices and low_matrices:
-            interference = self.compute_interference_patterns(
-                high_matrices['activations'], low_matrices['activations']
-            )
-            results['interference'] = interference
-            
-            high_patterns = high_matrices.get('spline_codes', high_matrices['binary_patterns'])
-            low_patterns = low_matrices.get('spline_codes', low_matrices['binary_patterns'])
-            
-            high_polytopes = {tuple(pattern.astype(int)) for pattern in high_patterns}
-            low_polytopes = {tuple(pattern.astype(int)) for pattern in low_patterns}
-            
-            shared_polytopes = high_polytopes.intersection(low_polytopes)
-            total_unique_polytopes = len(high_polytopes.union(low_polytopes))
-            
-            results['polytope_sharing'] = {
-                'shared_polytope_count': len(shared_polytopes),
-                'total_unique_polytopes': total_unique_polytopes,
-                'sharing_fraction': len(shared_polytopes) / total_unique_polytopes if total_unique_polytopes > 0 else 0.0,
-                'high_only_polytopes': len(high_polytopes - low_polytopes),
-                'low_only_polytopes': len(low_polytopes - high_polytopes)
-            }
-        
-        return results
-    
     def _analyze_checkpoint_layer_wise(self, records: List[Dict[str, Any]], checkpoint_step: str) -> Dict[str, Any]:
         """New layer-wise analysis method that computes metrics per layer."""
         # Organize by layer and frequency
@@ -964,222 +838,6 @@ class RefinedPolytopeAnalyzer:
         
         return layer_result
     
-    def _analyze_layer_transitions(self, layer_groups: Dict[int, Dict[str, List[Dict[str, Any]]]], 
-                                 checkpoint_step: str) -> Dict[str, Any]:
-        """Analyze how polytopes transition between adjacent layers."""
-        sorted_layers = sorted(layer_groups.keys())
-        if len(sorted_layers) < 2:
-            return {'warning': 'Need at least 2 layers for transition analysis'}
-        
-        transition_results = {
-            'layer_pairs': [],
-            'transition_metrics': {},
-            'inheritance_patterns': {},
-            'emergence_patterns': {}
-        }
-        
-        # Analyze transitions between adjacent layers
-        for i in range(len(sorted_layers) - 1):
-            layer_a = sorted_layers[i]
-            layer_b = sorted_layers[i + 1]
-            
-            transition_results['layer_pairs'].append((layer_a, layer_b))
-            
-            # Get patterns for both layers across frequency groups
-            for freq_type in ['high_freq', 'low_freq']:
-                records_a = layer_groups[layer_a][freq_type]
-                records_b = layer_groups[layer_b][freq_type]
-                
-                if not records_a or not records_b:
-                    continue
-                
-                # Extract pattern matrices
-                matrices_a = self.extract_analysis_matrices(records_a)
-                matrices_b = self.extract_analysis_matrices(records_b)
-                
-                if not matrices_a or not matrices_b:
-                    continue
-                
-                patterns_a = matrices_a.get('spline_codes', matrices_a['binary_patterns'])
-                patterns_b = matrices_b.get('spline_codes', matrices_b['binary_patterns'])
-                
-                # Compute transition metrics
-                transition_key = f"{layer_a}_to_{layer_b}_{freq_type}"
-                transition_metrics = self._compute_pattern_transitions(patterns_a, patterns_b, records_a, records_b)
-                transition_results['transition_metrics'][transition_key] = transition_metrics
-        
-        # Compute global inheritance patterns across all layers
-        inheritance_metrics = self._compute_inheritance_patterns(layer_groups, sorted_layers)
-        transition_results['inheritance_patterns'] = inheritance_metrics
-        
-        return transition_results
-    
-    def _compute_pattern_transitions(self, patterns_a: np.ndarray, patterns_b: np.ndarray,
-                                   records_a: List[Dict[str, Any]], records_b: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Compute detailed metrics for pattern transitions between two layers."""
-        # Get unique patterns in each layer
-        unique_a, indices_a, counts_a = np.unique(patterns_a, axis=0, return_inverse=True, return_counts=True)
-        unique_b, indices_b, counts_b = np.unique(patterns_b, axis=0, return_inverse=True, return_counts=True)
-        
-        # Convert to sets of tuples for intersection analysis
-        set_a = {tuple(pattern.astype(int)) for pattern in unique_a}
-        set_b = {tuple(pattern.astype(int)) for pattern in unique_b}
-        
-        # Pattern inheritance: patterns that appear in both layers
-        inherited_patterns = set_a.intersection(set_b)
-        emerged_patterns = set_b - set_a  # New patterns in layer B
-        lost_patterns = set_a - set_b     # Patterns that disappeared
-        
-        # Compute inheritance metrics
-        inheritance_fraction = len(inherited_patterns) / len(set_a) if len(set_a) > 0 else 0.0
-        emergence_fraction = len(emerged_patterns) / len(set_b) if len(set_b) > 0 else 0.0
-        loss_fraction = len(lost_patterns) / len(set_a) if len(set_a) > 0 else 0.0
-        
-        # Pattern stability: measure how pattern usage changes
-        stability_scores = []
-        for pattern in inherited_patterns:
-            pattern_array = np.array(pattern, dtype=patterns_a.dtype)
-            
-            # Count occurrences in each layer
-            count_a = np.sum(np.all(patterns_a == pattern_array, axis=1))
-            count_b = np.sum(np.all(patterns_b == pattern_array, axis=1))
-            
-            # Stability = minimum count / maximum count (0 to 1)
-            if count_a > 0 and count_b > 0:
-                stability = min(count_a, count_b) / max(count_a, count_b)
-                stability_scores.append(stability)
-        
-        avg_pattern_stability = np.mean(stability_scores) if stability_scores else 0.0
-        
-        # N-gram inheritance analysis
-        ngram_inheritance = self._analyze_ngram_inheritance(inherited_patterns, emerged_patterns, 
-                                                          records_a, records_b, patterns_a, patterns_b)
-        
-        return {
-            'total_patterns_a': len(set_a),
-            'total_patterns_b': len(set_b),
-            'inherited_patterns': len(inherited_patterns),
-            'emerged_patterns': len(emerged_patterns),
-            'lost_patterns': len(lost_patterns),
-            'inheritance_fraction': float(inheritance_fraction),
-            'emergence_fraction': float(emergence_fraction),
-            'loss_fraction': float(loss_fraction),
-            'pattern_stability': float(avg_pattern_stability),
-            'pattern_novelty': float(len(emerged_patterns) / (len(set_a) + len(set_b)) if len(set_a) + len(set_b) > 0 else 0.0),
-            'ngram_inheritance': ngram_inheritance
-        }
-    
-    def _analyze_ngram_inheritance(self, inherited_patterns: set, emerged_patterns: set,
-                                 records_a: List[Dict[str, Any]], records_b: List[Dict[str, Any]], 
-                                 patterns_a: np.ndarray, patterns_b: np.ndarray) -> Dict[str, Any]:
-        """Analyze how n-grams are inherited or emerge between layers."""
-        # Map patterns to n-grams in each layer
-        pattern_to_ngrams_a = {}
-        pattern_to_ngrams_b = {}
-        
-        for i, record in enumerate(records_a):
-            if i < len(patterns_a):
-                pattern_key = tuple(patterns_a[i].astype(int))
-                phrase = record.get('phrase', f'sample_{i}')
-                if pattern_key not in pattern_to_ngrams_a:
-                    pattern_to_ngrams_a[pattern_key] = set()
-                pattern_to_ngrams_a[pattern_key].add(phrase)
-        
-        for i, record in enumerate(records_b):
-            if i < len(patterns_b):
-                pattern_key = tuple(patterns_b[i].astype(int))
-                phrase = record.get('phrase', f'sample_{i}')
-                if pattern_key not in pattern_to_ngrams_b:
-                    pattern_to_ngrams_b[pattern_key] = set()
-                pattern_to_ngrams_b[pattern_key].add(phrase)
-        
-        # Analyze n-gram conservation for inherited patterns
-        conserved_ngrams = 0
-        total_inherited_ngrams = 0
-        new_ngram_mappings = 0
-        
-        for pattern in inherited_patterns:
-            ngrams_a = pattern_to_ngrams_a.get(pattern, set())
-            ngrams_b = pattern_to_ngrams_b.get(pattern, set())
-            
-            if ngrams_a and ngrams_b:
-                conserved = len(ngrams_a.intersection(ngrams_b))
-                new_mappings = len(ngrams_b - ngrams_a)
-                
-                conserved_ngrams += conserved
-                total_inherited_ngrams += len(ngrams_a)
-                new_ngram_mappings += new_mappings
-        
-        # Analyze emerging patterns and their n-grams
-        emerged_ngram_count = sum(len(pattern_to_ngrams_b.get(pattern, set())) 
-                                for pattern in emerged_patterns)
-        
-        return {
-            'conserved_ngrams': conserved_ngrams,
-            'total_inherited_ngrams': total_inherited_ngrams,
-            'ngram_conservation_rate': conserved_ngrams / total_inherited_ngrams if total_inherited_ngrams > 0 else 0.0,
-            'new_ngram_mappings': new_ngram_mappings,
-            'emerged_ngram_count': emerged_ngram_count,
-            'semantic_stability': conserved_ngrams / (conserved_ngrams + new_ngram_mappings) if (conserved_ngrams + new_ngram_mappings) > 0 else 0.0
-        }
-    
-    def _compute_inheritance_patterns(self, layer_groups: Dict[int, Dict[str, List[Dict[str, Any]]]], 
-                                    sorted_layers: List[int]) -> Dict[str, Any]:
-        """Compute global inheritance patterns across all layers."""
-        inheritance_summary = {
-            'layer_sequence': sorted_layers,
-            'global_pattern_flow': {},
-            'frequency_specific_inheritance': {}
-        }
-        
-        # Track patterns across the entire layer sequence
-        for freq_type in ['high_freq', 'low_freq']:
-            layer_patterns = {}
-            
-            # Extract patterns from each layer
-            for layer in sorted_layers:
-                records = layer_groups[layer][freq_type]
-                if records:
-                    matrices = self.extract_analysis_matrices(records)
-                    if matrices:
-                        patterns = matrices.get('spline_codes', matrices['binary_patterns'])
-                        unique_patterns = {tuple(p.astype(int)) for p in np.unique(patterns, axis=0)}
-                        layer_patterns[layer] = unique_patterns
-            
-            # Compute inheritance metrics across all layers
-            if layer_patterns:
-                first_layer = min(layer_patterns.keys())
-                last_layer = max(layer_patterns.keys())
-                
-                # Patterns that persist from first to last layer
-                persistent_patterns = layer_patterns[first_layer]
-                for layer in sorted(layer_patterns.keys())[1:]:
-                    persistent_patterns = persistent_patterns.intersection(layer_patterns[layer])
-                
-                # Patterns that appear in multiple layers (but not necessarily all)
-                all_patterns = set()
-                for patterns in layer_patterns.values():
-                    all_patterns.update(patterns)
-                
-                multi_layer_patterns = set()
-                for pattern in all_patterns:
-                    layer_count = sum(1 for layer_pats in layer_patterns.values() if pattern in layer_pats)
-                    if layer_count > 1:
-                        multi_layer_patterns.add(pattern)
-                
-                inheritance_summary['frequency_specific_inheritance'][freq_type] = {
-                    'total_unique_patterns': len(all_patterns),
-                    'persistent_patterns': len(persistent_patterns),
-                    'multi_layer_patterns': len(multi_layer_patterns),
-                    'persistence_rate': len(persistent_patterns) / len(all_patterns) if all_patterns else 0.0,
-                    'multi_layer_rate': len(multi_layer_patterns) / len(all_patterns) if all_patterns else 0.0,
-                    'average_layer_span': np.mean([
-                        sum(1 for layer_pats in layer_patterns.values() if pattern in layer_pats)
-                        for pattern in all_patterns
-                    ]) if all_patterns else 0.0
-                }
-        
-        return inheritance_summary
 
     def create_evolution_visualization(self, results: List[Dict[str, Any]], output_dir: str) -> None:
         """Create evolution visualizations supporting both legacy and layer-wise analysis."""
@@ -1193,42 +851,7 @@ class RefinedPolytopeAnalyzer:
             self._create_layer_wise_visualizations(results, output_path)
         else:
             self._create_legacy_visualizations(results, output_path)
-    
-    def _create_legacy_visualizations(self, results: List[Dict[str, Any]], output_path: Path) -> None:
-        """Create legacy visualizations (averaged across layers)."""
-        df_data = []
-        for result in results:
-            if 'error' in result:
-                continue
-                
-            checkpoint = result['checkpoint_step']
-            high_density = result.get('high_freq_density', {})
-            low_density = result.get('low_freq_density', {})
-            
-            df_data.append({
-                'checkpoint': int(checkpoint),
-                'group': 'high_freq',
-                'density_mean': high_density.get('density_mean', 0),
-                'participation_ratio': result.get('high_freq_participation_ratio', 0),
-                'sparsity': result.get('high_freq_sparsity', 0),
-                'activation_norm': result.get('high_freq_activation_norm', 0)
-            })
-            
-            df_data.append({
-                'checkpoint': int(checkpoint),
-                'group': 'low_freq', 
-                'density_mean': low_density.get('density_mean', 0),
-                'participation_ratio': result.get('low_freq_participation_ratio', 0),
-                'sparsity': result.get('low_freq_sparsity', 0),
-                'activation_norm': result.get('low_freq_activation_norm', 0)
-            })
-        
-        if not df_data:
-            logger.warning("No data for legacy visualization")
-            return
-            
-        df = pd.DataFrame(df_data)
-        self._plot_legacy_evolution(df, output_path)
+
     
     def _create_layer_wise_visualizations(self, results: List[Dict[str, Any]], output_path: Path) -> None:
         """Create layer-wise evolution visualizations."""
@@ -1313,9 +936,7 @@ class RefinedPolytopeAnalyzer:
         
         metrics = [
             ('density_mean', 'Polytope Density'),
-            ('participation_ratio', 'Participation Ratio'), 
-            ('sparsity', 'Sparsity'),
-            ('activation_norm', 'Activation Norm')
+            ('participation_ratio', 'Participation Ratio')
         ]
         
         for idx, (metric, title) in enumerate(metrics):
@@ -1342,10 +963,7 @@ class RefinedPolytopeAnalyzer:
         layers = sorted(df['layer'].unique())
         metrics = [
             ('density_mean', 'Polytope Density'),
-            ('participation_ratio', 'Participation Ratio'), 
-            ('sparsity', 'Sparsity'),
-            ('activation_norm', 'Activation Norm'),
-            ('pattern_reuse_rate', 'Pattern Reuse Rate')
+            ('participation_ratio', 'Participation Ratio')
         ]
         
         # Create layer-wise plots
