@@ -16,16 +16,65 @@ from matplotlib.ticker import MaxNLocator
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-def get_participation_ratio(high_activation_space: Dict[int, np.ndarray], low_activation_space: Dict[int, np.ndarray]) -> Dict[str, float]:
-    """Compute participation ratio using eigen values from covariance matrix for each layer and frequency category."""
+def diagnose_activation_data(activations: np.ndarray, label: str = "") -> Dict[str, Any]:
+    """Diagnose potential numerical issues in activation data for debugging.
+    
+    Args:
+        activations: Activation matrix to diagnose
+        label: Optional label for logging
+        
+    Returns:
+        Dictionary with diagnostic statistics
+    """
+    finite_mask = np.isfinite(activations)
+    finite_data = activations[finite_mask] if np.any(finite_mask) else np.array([])
+    
+    diagnostics = {
+        'label': label,
+        'shape': activations.shape,
+        'n_samples': activations.shape[0],
+        'n_features': activations.shape[1] if len(activations.shape) > 1 else 0,
+        'has_nan': bool(np.any(np.isnan(activations))),
+        'has_inf': bool(np.any(np.isinf(activations))),
+        'pct_nonfinite': float(100.0 * (1.0 - np.sum(finite_mask) / activations.size)),
+    }
+    
+    if len(finite_data) > 0:
+        diagnostics.update({
+            'min': float(np.min(finite_data)),
+            'max': float(np.max(finite_data)),
+            'mean': float(np.mean(finite_data)),
+            'std': float(np.std(finite_data)),
+            'median': float(np.median(finite_data)),
+        })
+        
+        if len(activations.shape) == 2 and activations.shape[0] >= activations.shape[1]:
+            try:
+                diagnostics['matrix_rank'] = int(np.linalg.matrix_rank(activations))
+                diagnostics['condition_number'] = float(np.linalg.cond(activations))
+            except:
+                diagnostics['matrix_rank'] = 'error'
+                diagnostics['condition_number'] = 'error'
+    
+    return diagnostics
+
+def get_participation_ratio(high_activation_space: Dict[int, np.ndarray], low_activation_space: Dict[int, np.ndarray], 
+                           strict_mode: bool = True) -> Dict[str, float]:
+    """Compute participation ratio using eigen values from covariance matrix for each layer and frequency category.
+    
+    Args:
+        high_activation_space: Dictionary mapping layer to high-frequency activations
+        low_activation_space: Dictionary mapping layer to low-frequency activations
+        strict_mode: If True, raise exception on computation failure. If False, return NaN.
+    """
     high_participation_ratio = {}
     low_participation_ratio = {}
 
     for layer, activations in high_activation_space.items():
-        high_participation_ratio[layer] = compute_participation_ratio(activations)
+        high_participation_ratio[layer] = compute_participation_ratio(activations, strict_mode=strict_mode)
 
     for layer, activations in low_activation_space.items():
-        low_participation_ratio[layer] = compute_participation_ratio(activations)
+        low_participation_ratio[layer] = compute_participation_ratio(activations, strict_mode=strict_mode)
 
     return high_participation_ratio, low_participation_ratio
 
@@ -117,35 +166,105 @@ def compute_polytope_density(activations: np.ndarray, patterns: np.ndarray,
         'density_std': float(np.std(densities)),
     }
 
-def compute_participation_ratio(activations: np.ndarray) -> float:
-    """Compute participation ratio (effective dimensionality) with robust numerical handling."""
+def compute_participation_ratio(activations: np.ndarray, strict_mode: bool = True) -> float:
+    """Compute participation ratio with research-grade error handling.
+    
+    Args:
+        activations: Activation matrix (n_samples, n_features)
+        strict_mode: If True, raise exception on failure. If False, return NaN with error logging.
+        
+    Returns:
+        Participation ratio (PR >= 1.0)
+        
+    Raises:
+        ValueError: If computation is numerically unstable (strict_mode=True)
+        np.linalg.LinAlgError: If PCA fails (strict_mode=True)
+    """
     try:
         activations_clean = np.where(np.isfinite(activations), activations, 0.0)
         activations_clipped = np.clip(activations_clean, -1e3, 1e3)
+        
+        # Manual standardization with overflow protection (more robust than StandardScaler)
         with np.errstate(over='ignore', invalid='ignore'):
-            scaler = StandardScaler()
-            activations_std = scaler.fit_transform(activations_clipped)
+            mean = np.mean(activations_clipped, axis=0)
+            # Compute std with intermediate clipping to prevent overflow
+            centered = activations_clipped - mean
+            centered_clipped = np.clip(centered, -100, 100)  # Clip before squaring
+            variance = np.mean(centered_clipped ** 2, axis=0)
+            std = np.sqrt(variance)
+            std = np.where(std > 1e-8, std, 1.0)  # Avoid division by zero
+            activations_std = centered / std
+            
         activations_std = np.where(np.isfinite(activations_std), activations_std, 0.0)
         activations_std = np.clip(activations_std, -6, 6)
+        
+        # Use standard PCA, but with explicit error handling
+        # For very large or unstable datasets, could switch to IncrementalPCA
         pca = PCA()
-        pca.fit(activations_std)
+        try:
+            pca.fit(activations_std)
+        except np.linalg.LinAlgError as e:
+            error_msg = (
+                f"PCA decomposition failed: {e}\n"
+                f"  This suggests the activation matrix is singular or ill-conditioned\n"
+                f"  Consider: 1) Checking for duplicate samples, 2) Adding regularization, 3) Using more data"
+            )
+            logger.error(error_msg)
+            if strict_mode:
+                raise ValueError(error_msg)
+            return np.nan
         eigenvals = pca.explained_variance_
         eigenvals = np.where(np.isfinite(eigenvals), eigenvals, 0.0)
         eigenvals = np.maximum(eigenvals, 1e-12)
+        
         with np.errstate(over='ignore', invalid='ignore'):
             numerator = np.sum(eigenvals) ** 2
             denominator = np.sum(eigenvals ** 2)
+        
+        # CRITICAL: No silent fallback - diagnose and fail explicitly
         if not np.isfinite(numerator) or not np.isfinite(denominator) or denominator < 1e-12:
-            logger.warning("Participation ratio calculation unstable, returning default")
-            return 1.0
+            error_msg = (
+                f"Participation ratio numerically unstable:\n"
+                f"  Shape: {activations.shape}\n"
+                f"  Numerator: {numerator:.6e}\n"
+                f"  Denominator: {denominator:.6e}\n"
+                f"  Eigenvalue range: [{np.min(eigenvals):.6e}, {np.max(eigenvals):.6e}]\n"
+                f"  Activation stats: min={np.min(activations_clean):.3f}, max={np.max(activations_clean):.3f}, "
+                f"mean={np.mean(activations_clean):.3f}, std={np.std(activations_clean):.3f}\n"
+                f"  Matrix rank: {np.linalg.matrix_rank(activations_std)}/{min(activations.shape)}"
+            )
+            logger.error(error_msg)
+            if strict_mode:
+                raise ValueError(error_msg)
+            return np.nan
+        
         participation_ratio = numerator / denominator
+        
         if not np.isfinite(participation_ratio):
-            return 1.0
+            error_msg = (
+                f"Participation ratio result is non-finite: {participation_ratio}\n"
+                f"  Numerator: {numerator:.6e}, Denominator: {denominator:.6e}\n"
+                f"  Shape: {activations.shape}"
+            )
+            logger.error(error_msg)
+            if strict_mode:
+                raise ValueError(error_msg)
+            return np.nan
+        
         participation_ratio = np.clip(participation_ratio, 1.0, float(len(eigenvals)))
         return float(participation_ratio)
+        
     except (np.linalg.LinAlgError, ValueError, RuntimeWarning) as e:
-        logger.warning(f"Participation ratio computation failed: {e}, returning default value")
-        return 1.0
+        error_msg = (
+            f"Participation ratio computation failed with {type(e).__name__}: {str(e)}\n"
+            f"  Shape: {activations.shape}\n"
+            f"  Has NaN: {np.any(np.isnan(activations))}\n"
+            f"  Has Inf: {np.any(np.isinf(activations))}"
+        )
+        logger.error(error_msg)
+        if strict_mode:
+            raise
+        return np.nan
     
 def zscore_for_distance(activations: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """Z-score features to stabilize Euclidean distance computations with overflow protection."""
@@ -391,8 +510,15 @@ def compute_metrics_with_confidence_intervals(
     n_samples = len(activations)
     
     # Compute participation ratio ONCE on full dataset (deterministic, no resampling needed)
-    participation_ratio = compute_participation_ratio(activations)
-    logger.debug(f"Computed participation ratio on full dataset: {participation_ratio:.4f}")
+    participation_ratio = compute_participation_ratio(activations, strict_mode=False)
+    
+    # Validate and diagnose PR computation
+    if np.isnan(participation_ratio):
+        logger.error(f"Participation ratio failed for sample with {n_samples} samples")
+        diagnostics = diagnose_activation_data(activations, label=f"PR_failure_{n_samples}_samples")
+        logger.error(f"Diagnostics: {diagnostics}")
+    else:
+        logger.debug(f"Computed participation ratio on full dataset: {participation_ratio:.4f}")
 
     if ci_method == 'batch_means':
         # Batch-means CI: shuffle and split into n_batches (without replacement)
@@ -521,6 +647,53 @@ def compute_metrics_with_confidence_intervals(
         'n_bootstrap_runs': len(density_estimates),
         'ci_method': 'bootstrap',
     }
+
+def validate_layer_metrics(metrics: Dict[str, Any], checkpoint: str, layer: int, 
+                          freq_type: str, raise_on_invalid: bool = True) -> bool:
+    """Validate computed metrics for research integrity.
+    
+    Args:
+        metrics: Metrics dictionary from compute_metrics_with_confidence_intervals
+        checkpoint: Checkpoint identifier
+        layer: Layer number
+        freq_type: 'high_freq' or 'low_freq'
+        raise_on_invalid: If True, raise exception on invalid data
+        
+    Returns:
+        True if valid, False otherwise
+        
+    Raises:
+        ValueError: If metrics are invalid and raise_on_invalid=True
+    """
+    issues = []
+    
+    pr_mean = metrics.get('participation_ratio_mean', np.nan)
+    density_mean = metrics.get('density_mean', np.nan)
+    
+    if np.isnan(pr_mean):
+        issues.append(f"Participation ratio is NaN")
+    elif pr_mean < 1.0:
+        issues.append(f"Participation ratio {pr_mean:.3f} < 1.0 (impossible)")
+    
+    if np.isnan(density_mean):
+        issues.append(f"Density mean is NaN")
+    elif density_mean < 0:
+        issues.append(f"Density {density_mean:.3f} < 0 (impossible)")
+    
+    if metrics.get('n_samples', 0) < 10:
+        issues.append(f"Too few samples: {metrics.get('n_samples', 0)}")
+    
+    if issues:
+        error_msg = (
+            f"VALIDATION FAILED: Checkpoint {checkpoint}, Layer {layer}, {freq_type}\n"
+            + "\n".join(f"  - {issue}" for issue in issues)
+        )
+        logger.error(error_msg)
+        if raise_on_invalid:
+            raise ValueError(error_msg)
+        return False
+    
+    return True
     
 def polytope_analysis(
     path_to_records: str, 
@@ -532,7 +705,9 @@ def polytope_analysis(
     parallel_checkpoints: bool = False,
     ci_method: str = 'batch_means',
     n_batches: int = 5,
-    sample_cap: Optional[int] = None
+    sample_cap: Optional[int] = None,
+    strict_mode: bool = False,
+    validate_metrics: bool = True
 ) -> Dict[str, Any]:
     """Run polytope analysis with statistical robustness on checkpoint data.
     
@@ -549,6 +724,8 @@ def polytope_analysis(
         parallel_checkpoints: If True, process checkpoints in parallel (default: False)
         ci_method: 'bootstrap' or 'batch_means' (default: 'batch_means' for speed)
         n_batches: Number of batches when ci_method='batch_means'
+        strict_mode: If True, raise exceptions on computational failures (default: False for robustness)
+        validate_metrics: If True, validate all computed metrics for research integrity (default: True)
         
     Returns:
         Dictionary with structure:
@@ -648,6 +825,10 @@ def polytope_analysis(
                     n_workers=n_workers
                 )
                 
+                # Validate metrics for research integrity
+                if validate_metrics:
+                    validate_layer_metrics(metrics, checkpoint, layer, freq_type, raise_on_invalid=strict_mode)
+                
                 results[checkpoint][layer][freq_type] = metrics
                 
                 logger.info(f"  Layer {layer} {freq_type}: "
@@ -667,7 +848,9 @@ def polytope_analysis(
         'n_batches': n_batches,
         'parallel_checkpoints': parallel_checkpoints,
         'input_metadata': input_metadata,
-        'sample_cap': sample_cap
+        'sample_cap': sample_cap,
+        'strict_mode': strict_mode,
+        'validate_metrics': validate_metrics
     }
     
     logger.info(f"Analysis complete: {len(results)} checkpoints processed")
@@ -877,40 +1060,67 @@ def _plot_layerwise_metrics(analysis_results: Dict, checkpoints: List, checkpoin
         for idx, layer in enumerate(selected_layers):
             ax = axes[idx] if n_layers > 1 else axes[0]
             
+            # Track data quality per frequency type
+            data_quality = {'high_freq': 0, 'low_freq': 0}
+            
             for freq_type in ['high_freq', 'low_freq']:
                 means = []
                 stds = []
-                x_vals = np.array(checkpoint_numeric, dtype=float)
+                valid_x_vals = []
                 
-                for checkpoint in checkpoints:
+                for i, checkpoint in enumerate(checkpoints):
                     metrics_data = analysis_results[checkpoint][layer][freq_type]
-                    means.append(metrics_data.get(metric_mean, 0))
-                    stds.append(metrics_data.get(metric_std, 0))
+                    mean_val = metrics_data.get(metric_mean, 0)
+                    std_val = metrics_data.get(metric_std, 0)
+                    
+                    # Skip NaN values with warning
+                    if np.isnan(mean_val):
+                        logger.warning(f"NaN value detected: checkpoint={checkpoint}, layer={layer}, "
+                                      f"freq={freq_type}, metric={metric_mean}")
+                        continue
+                    
+                    means.append(mean_val)
+                    stds.append(std_val)
+                    valid_x_vals.append(checkpoint_numeric[i])
+                
+                # Track valid data points for this frequency type
+                data_quality[freq_type] = len(means)
                 
                 means = np.array(means)
                 stds = np.array(stds)
+                x_vals = np.array(valid_x_vals, dtype=float)
                 
-                # Plot with presentation-quality thick lines
-                color = colors[freq_type]
-                marker = markers[freq_type]
-                label = freq_type.replace('_', ' ').title()
-                
-                marker_step = max(1, len(x_vals) // 10)
-                ax.plot(
-                    x_vals,
-                    means,
-                    marker=marker,
-                    markevery=marker_step,
-                    color=color,
-                    linewidth=3.2,
-                    markersize=6,
-                    label=label,
-                    alpha=0.98,
-                )
-                ax.fill_between(x_vals, means - stds, means + stds, color=color, alpha=0.22)
+                # Plot with presentation-quality thick lines (only if we have data)
+                if len(x_vals) > 0:
+                    color = colors[freq_type]
+                    marker = markers[freq_type]
+                    label = freq_type.replace('_', ' ').title()
+                    
+                    marker_step = max(1, len(x_vals) // 10)
+                    ax.plot(
+                        x_vals,
+                        means,
+                        marker=marker,
+                        markevery=marker_step,
+                        color=color,
+                        linewidth=3.2,
+                        markersize=6,
+                        label=label,
+                        alpha=0.98,
+                    )
+                    ax.fill_between(x_vals, means - stds, means + stds, color=color, alpha=0.22)
             
             # Apply presentation styling to each subplot
             _style_ax(ax, xlabel='Checkpoint', ylabel=title, title=f'Layer {layer}')
+            
+            # Add data quality annotation
+            n_total = len(checkpoints)
+            n_valid_high = data_quality['high_freq']
+            n_valid_low = data_quality['low_freq']
+            if n_valid_high < n_total or n_valid_low < n_total:
+                ax.text(0.02, 0.02, f'Valid H/L: {n_valid_high}/{n_valid_low} of {n_total}', 
+                       transform=ax.transAxes, fontsize=10, alpha=0.7,
+                       bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.3))
             
             # Ensure consistent numeric x-axis and sparse ticks
             ax.set_xlim(float(checkpoint_numeric[0]), float(checkpoint_numeric[-1]))
