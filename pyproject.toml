@@ -42,6 +42,7 @@ dependencies = [
     "pytest>=8.0",
     "scikit-learn>=1.7.2",
     "hdbscan>=0.8.40",
+    "nnterp>=1.2.2",
 ]
 
 [tool.ruff]
@@ -83,5 +84,10 @@ include = [
   "neuron_embeddings.*",
   "jsd_polysemanticity",
   "jsd_polysemanticity.*"
+]
+
+[dependency-groups]
+dev = [
+    "ty>=0.0.7",
 ]
 
