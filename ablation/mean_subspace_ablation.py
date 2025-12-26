@@ -32,7 +32,7 @@ class AblationConfig:
     device: str = "cuda"
     torch_dtype: torch.dtype = torch.float16
     layer_idx: int = 5
-    target_component: str = "mlp"
+    target_component: str = "residual"
     calibration_batch_size: int = 8
     eval_batch_size: int = 4
 
@@ -220,21 +220,11 @@ class MeanSubspaceAblation:
             raise ValueError(f"Unknown target component: {self.config.target_component}")
         return self._arch_info[component_map[self.config.target_component]](layer_proxy)  # type: ignore
 
-    def _extract_at_position(self, act_tensor: torch.Tensor, position: str) -> torch.Tensor:
-        """Extract activations at specified position."""
-        if act_tensor.dim() == 2:
-            act_tensor = act_tensor.unsqueeze(0)
-        if position == "last":
-            return act_tensor[:, -1, :]
-        elif position == "first":
-            return act_tensor[:, 0, :]
-        elif position == "mean":
-            return act_tensor.mean(dim=1)
-        raise ValueError(f"Unknown position: {position}")
+    def _extract_at_position(self, act_tensor: torch.Tensor) -> torch.Tensor:
+        """Extract activations at last position."""
+        return act_tensor[:, -1, :]
 
-    def extract_activations(
-        self, texts: List[str], layer_idx: Optional[int] = None, position: str = "last"
-    ) -> np.ndarray:
+    def extract_activations(self, texts: List[str], layer_idx: Optional[int] = None) -> np.ndarray:
         """Extract activations from model for given texts."""
         if self.model is None or self._arch_info is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
@@ -251,7 +241,7 @@ class MeanSubspaceAblation:
                     activations = self._get_activation_hook_point(layer_proxy).save()
                     _ = self.model.output  # type: ignore
 
-            batch_acts = self._extract_at_position(activations.value, position)
+            batch_acts = self._extract_at_position(activations.value)
             all_activations.append(batch_acts.cpu().numpy())
 
         return np.concatenate(all_activations, axis=0)
@@ -261,18 +251,15 @@ class MeanSubspaceAblation:
         positive_texts: List[str],
         negative_texts: List[str],
         layer_idx: Optional[int] = None,
-        position: str = "last",
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Extract activations for paired positive/negative examples."""
         print(f"Extracting positive activations ({len(positive_texts)} samples)...")
-        pos_acts = self.extract_activations(positive_texts, layer_idx, position)
+        pos_acts = self.extract_activations(positive_texts, layer_idx)
         print(f"Extracting negative activations ({len(negative_texts)} samples)...")
-        neg_acts = self.extract_activations(negative_texts, layer_idx, position)
+        neg_acts = self.extract_activations(negative_texts, layer_idx)
         return pos_acts, neg_acts
 
-    def calibrate(
-        self, direction: SubspaceDirection, calibration_texts: List[str], position: str = "last"
-    ) -> float:
+    def calibrate(self, direction: SubspaceDirection, calibration_texts: List[str]) -> float:
         """Compute mean projection onto direction for calibration."""
         if self.model is None or self._arch_info is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
@@ -289,7 +276,7 @@ class MeanSubspaceAblation:
                     activations = self._get_activation_hook_point(layer_proxy).save()
                     _ = self.model.output  # type: ignore
 
-            batch_acts = self._extract_at_position(activations.value, position)
+            batch_acts = self._extract_at_position(activations.value)
             projections = torch.matmul(batch_acts.float(), direction_vec.float())
             all_projections.append(projections.cpu())
 
@@ -415,7 +402,7 @@ class MeanSubspaceAblation:
 
 
 def load_blimp_minimal_pairs(
-    subset: str = "adjunct_island", max_pairs: Optional[int] = None
+    subset: str = "anaphor_number_agreement", max_pairs: Optional[int] = None
 ) -> List[Tuple[str, str]]:
     """Load minimal pairs from BLIMP dataset."""
     from datasets import load_dataset
@@ -426,49 +413,206 @@ def load_blimp_minimal_pairs(
 
 
 if __name__ == "__main__":
-    # Example experiment
+    import datetime
+
+    # Configuration
+    model_name = "allenai/OLMo-1B-hf"
+    num_layers = 16  # OLMo-1B has 16 layers
+    blimp_subset = "anaphor_number_agreement"
+    max_pairs = 200
+
+    # Load data once
+    print("Loading BLiMP dataset...")
+    pairs = load_blimp_minimal_pairs(blimp_subset, max_pairs=max_pairs)
+    discovery_pairs, eval_pairs = pairs[:100], pairs[100:]
+
+    positive_texts = [p[0] for p in discovery_pairs]
+    negative_texts = [p[1] for p in discovery_pairs]
+    calibration_texts = positive_texts[:50] + negative_texts[:50]
+
+    # Storage for all results
+    all_results = []
+
+    # Create ablator once (we'll reuse it across layers)
     config = AblationConfig(
-        model_name="allenai/OLMo-1B-hf",
-        layer_idx=5,
+        model_name=model_name,
+        layer_idx=0,  # Will be overridden per layer
         target_component="residual",
         calibration_batch_size=4,
     )
 
-    pairs = load_blimp_minimal_pairs("adjunct_island", max_pairs=200)
-    discovery_pairs, eval_pairs = pairs[:100], pairs[100:]
-
     ablator = MeanSubspaceAblation(config)
     ablator.load_model()
 
-    positive_texts = [p[0] for p in discovery_pairs]
-    negative_texts = [p[1] for p in discovery_pairs]
-    pos_acts, neg_acts = ablator.extract_paired_activations(
-        positive_texts, negative_texts, layer_idx=config.layer_idx
-    )
+    # Run experiment for each layer
+    for layer in range(num_layers):
+        print(f"\n{'=' * 80}")
+        print(f"LAYER {layer} / {num_layers - 1}")
+        print(f"{'=' * 80}")
 
-    direction = DirectionDiscovery.from_diff_means(
-        pos_acts, neg_acts, config.layer_idx, "syntax_direction"
-    )
+        # Extract activations for this layer
+        print(f"\nExtracting activations at layer {layer}...")
+        pos_acts, neg_acts = ablator.extract_paired_activations(
+            positive_texts, negative_texts, layer_idx=layer
+        )
 
-    calibration_texts = positive_texts[:50] + negative_texts[:50]
-    results = ablator.run_ablation_experiment(
-        direction.to(config.device), calibration_texts, eval_pairs
-    )
+        # Direction 1: Diff-means
+        print(f"\n--- Diff-Means Direction ---")
+        diff_direction = DirectionDiscovery.from_diff_means(
+            pos_acts, neg_acts, layer, name=f"layer{layer}_diffmeans"
+        )
 
-    # Save results
-    output_path = Path("cache/ablation_results.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+        diff_results = ablator.run_ablation_experiment(
+            diff_direction.to(config.device),
+            calibration_texts,
+            eval_pairs,
+            include_random_baseline=True,
+        )
+
+        # Direction 2: PCA on differences
+        print(f"\n--- PCA on Differences Direction ---")
+        pca_direction = DirectionDiscovery.from_pca_on_diff(
+            pos_acts, neg_acts, layer, component=0, name=f"layer{layer}_pca"
+        )
+
+        pca_results = ablator.run_ablation_experiment(
+            pca_direction.to(config.device),
+            calibration_texts,
+            eval_pairs,
+            include_random_baseline=True,
+        )
+
+        # Store compact results
+        all_results.append(
+            {
+                "layer": layer,
+                "diff_means": {
+                    "direction_name": diff_results["direction_name"],
+                    "discovery_method": diff_results["discovery_method"],
+                    "baseline_accuracy": diff_results["baseline"]["accuracy"],
+                    "ablation_accuracy": diff_results["ablation"]["accuracy"],
+                    "ablation_effect": diff_results["ablation_effect"],
+                    "random_accuracy": diff_results.get("random_baseline", {}).get("accuracy"),
+                    "random_effect": diff_results.get("random_effect"),
+                    "mean_projection": diff_results["mean_projection"],
+                    "metadata": diff_results["direction_metadata"],
+                },
+                "pca": {
+                    "direction_name": pca_results["direction_name"],
+                    "discovery_method": pca_results["discovery_method"],
+                    "baseline_accuracy": pca_results["baseline"]["accuracy"],
+                    "ablation_accuracy": pca_results["ablation"]["accuracy"],
+                    "ablation_effect": pca_results["ablation_effect"],
+                    "random_accuracy": pca_results.get("random_baseline", {}).get("accuracy"),
+                    "random_effect": pca_results.get("random_effect"),
+                    "mean_projection": pca_results["mean_projection"],
+                    "metadata": pca_results["direction_metadata"],
+                },
+            }
+        )
+
+        # Print layer summary
+        print(f"\n{'=' * 80}")
+        print(f"LAYER {layer} SUMMARY:")
+        print(f"  Diff-Means: {diff_results['ablation_effect']:+.2%} effect")
+        print(f"  PCA:        {pca_results['ablation_effect']:+.2%} effect")
+        print(f"{'=' * 80}")
+
+    # Save all results
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path("cache/ablation_results")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save full results
+    output_path = output_dir / f"full_results_{blimp_subset}_{timestamp}.json"
     with open(output_path, "w") as f:
         json.dump(
             {
-                "direction_name": results["direction_name"],
-                "layer_idx": results["layer_idx"],
-                "baseline_accuracy": results["baseline"]["accuracy"],
-                "ablation_accuracy": results["ablation"]["accuracy"],
-                "ablation_effect": results["ablation_effect"],
-                "random_baseline_accuracy": results.get("random_baseline", {}).get("accuracy"),
+                "experiment_info": {
+                    "model": model_name,
+                    "blimp_subset": blimp_subset,
+                    "num_layers": num_layers,
+                    "discovery_pairs": len(discovery_pairs),
+                    "eval_pairs": len(eval_pairs),
+                    "calibration_samples": len(calibration_texts),
+                    "timestamp": timestamp,
+                },
+                "results": all_results,
             },
             f,
             indent=2,
         )
-    print(f"\nResults saved to {output_path}")
+    print(f"\nFull results saved to {output_path}")
+
+    # Save summary CSV for easy analysis
+    import csv
+
+    summary_path = output_dir / f"summary_{blimp_subset}_{timestamp}.csv"
+    with open(summary_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "layer",
+                "method",
+                "baseline_acc",
+                "ablation_acc",
+                "effect",
+                "random_acc",
+                "random_effect",
+                "mean_proj",
+            ]
+        )
+
+        for result in all_results:
+            layer = result["layer"]
+            # Diff-means row
+            dm = result["diff_means"]
+            writer.writerow(
+                [
+                    layer,
+                    "diff_means",
+                    f"{dm['baseline_accuracy']:.4f}",
+                    f"{dm['ablation_accuracy']:.4f}",
+                    f"{dm['ablation_effect']:.4f}",
+                    f"{dm.get('random_accuracy', 0):.4f}",
+                    f"{dm.get('random_effect', 0):.4f}",
+                    f"{dm['mean_projection']:.4f}",
+                ]
+            )
+            # PCA row
+            pca = result["pca"]
+            writer.writerow(
+                [
+                    layer,
+                    "pca",
+                    f"{pca['baseline_accuracy']:.4f}",
+                    f"{pca['ablation_accuracy']:.4f}",
+                    f"{pca['ablation_effect']:.4f}",
+                    f"{pca.get('random_accuracy', 0):.4f}",
+                    f"{pca.get('random_effect', 0):.4f}",
+                    f"{pca['mean_projection']:.4f}",
+                ]
+            )
+
+    print(f"Summary CSV saved to {summary_path}")
+
+    # Print final summary
+    print("\n" + "=" * 80)
+    print("EXPERIMENT COMPLETE - SUMMARY")
+    print("=" * 80)
+    print(f"\nModel: {model_name}")
+    print(f"BLiMP subset: {blimp_subset}")
+    print(f"Layers tested: {num_layers}")
+    print("\nTop 3 layers by ablation effect (Diff-Means):")
+    sorted_dm = sorted(
+        all_results, key=lambda x: abs(x["diff_means"]["ablation_effect"]), reverse=True
+    )
+    for i, r in enumerate(sorted_dm[:3], 1):
+        print(f"  {i}. Layer {r['layer']}: {r['diff_means']['ablation_effect']:+.2%}")
+
+    print("\nTop 3 layers by ablation effect (PCA):")
+    sorted_pca = sorted(all_results, key=lambda x: abs(x["pca"]["ablation_effect"]), reverse=True)
+    for i, r in enumerate(sorted_pca[:3], 1):
+        print(f"  {i}. Layer {r['layer']}: {r['pca']['ablation_effect']:+.2%}")
+
+    print(f"\nResults saved to: {output_dir.absolute()}")
