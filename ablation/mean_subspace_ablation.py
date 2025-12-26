@@ -241,7 +241,7 @@ class MeanSubspaceAblation:
                     activations = self._get_activation_hook_point(layer_proxy).save()
                     _ = self.model.output  # type: ignore
 
-            batch_acts = self._extract_at_position(activations.value)
+            batch_acts = self._extract_at_position(activations)
             all_activations.append(batch_acts.cpu().numpy())
 
         return np.concatenate(all_activations, axis=0)
@@ -276,7 +276,7 @@ class MeanSubspaceAblation:
                     activations = self._get_activation_hook_point(layer_proxy).save()
                     _ = self.model.output  # type: ignore
 
-            batch_acts = self._extract_at_position(activations.value)
+            batch_acts = self._extract_at_position(activations)
             projections = torch.matmul(batch_acts.float(), direction_vec.float())
             all_projections.append(projections.cpu())
 
@@ -310,7 +310,7 @@ class MeanSubspaceAblation:
 
                 logits = self.model.output.logits.save()  # type: ignore
 
-        logits_val = logits.value
+        logits_val = logits
         tokens = self.model.tokenizer(text, return_tensors="pt")["input_ids"].to(self.device)  # type: ignore
         log_probs = torch.nn.functional.log_softmax(logits_val, dim=-1)
 
