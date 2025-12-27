@@ -53,10 +53,6 @@ from .mean_subspace_ablation import (
     SubspaceDirection,
     load_blimp_minimal_pairs,
 )
-from .polytope_ablation import (
-    PolytopeAblationExperiment,
-    PolytopeDirectionDiscovery,
-)
 
 __all__ = [
     # Core ablation
@@ -64,9 +60,5 @@ __all__ = [
     "AblationConfig",
     "SubspaceDirection",
     "DirectionDiscovery",
-
-    # Polytope integration
-    "PolytopeDirectionDiscovery",
-    "PolytopeAblationExperiment",
     "load_blimp_minimal_pairs",
 ]
