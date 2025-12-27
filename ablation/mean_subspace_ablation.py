@@ -141,20 +141,6 @@ class DirectionDiscovery:
             },
         )
 
-    @staticmethod
-    def random_direction(
-        hidden_dim: int, layer_idx: int, seed: int = 42, name: str = "random_direction"
-    ) -> SubspaceDirection:
-        """Random unit direction for baseline comparisons."""
-        rng = np.random.default_rng(seed)
-        return SubspaceDirection(
-            vector=torch.tensor(rng.standard_normal(hidden_dim), dtype=torch.float32),
-            layer_idx=layer_idx,
-            name=name,
-            discovery_method="random",
-            metadata={"seed": seed},
-        )
-
 
 class MeanSubspaceAblation:
     """Main class for mean subspace ablation experiments.
@@ -362,9 +348,8 @@ class MeanSubspaceAblation:
         direction: SubspaceDirection,
         calibration_texts: List[str],
         eval_pairs: List[Tuple[str, str]],
-        include_random_baseline: bool = True,
     ) -> Dict[str, Any]:
-        """Run complete ablation experiment with baseline and optional random control."""
+        """Run complete ablation experiment with baseline."""
         results = {
             "direction_name": direction.name,
             "layer_idx": direction.layer_idx,
@@ -389,23 +374,6 @@ class MeanSubspaceAblation:
         effect = baseline["accuracy"] - ablation["accuracy"]
         results["ablation_effect"] = effect
         print(f"Ablated accuracy: {ablation['accuracy']:.2%} (effect: {effect:+.2%})")
-
-        # Random baseline
-        if include_random_baseline:
-            print("\n=== Random Direction Baseline ===")
-            random_dir = DirectionDiscovery.random_direction(
-                direction.dim, direction.layer_idx, name="random_baseline"
-            ).to(self.device)
-            random_mean = self.calibrate(random_dir, calibration_texts)
-            random_results = self.evaluate_minimal_pairs(
-                eval_pairs, random_dir, random_mean, desc="Random"
-            )
-            results["random_baseline"] = random_results
-            random_effect = baseline["accuracy"] - random_results["accuracy"]
-            results["random_effect"] = random_effect
-            print(
-                f"Random accuracy: {random_results['accuracy']:.2%} (effect: {random_effect:+.2%})"
-            )
 
         return results
 
@@ -434,8 +402,6 @@ def visualization(
     baseline_acc = [d["baseline_accuracy"] for d in dm]
     ablation_acc = [d["ablation_accuracy"] for d in dm]
     ablation_effect = [d["ablation_effect"] for d in dm]
-    random_acc = [d.get("random_accuracy", 0) for d in dm]
-    random_effect = [d.get("random_effect", 0) for d in dm]
     mean_proj = [d["mean_projection"] for d in dm]
 
     # Clean model name for filename
@@ -456,17 +422,6 @@ def visualization(
         color="#2E86AB",
         label="Ablation Effect",
     )
-    ax1.plot(
-        layers,
-        random_effect,
-        marker="s",
-        linewidth=1,
-        markersize=5,
-        color="#A23B72",
-        alpha=0.6,
-        linestyle="--",
-        label="Random Baseline Effect",
-    )
     ax1.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
     ax1.fill_between(layers, ablation_effect, 0, alpha=0.3, color="#2E86AB")
     ax1.set_xlabel("Layer", fontsize=12, fontweight="bold")
@@ -484,21 +439,25 @@ def visualization(
             layers[idx], ablation_effect[idx], marker="*", markersize=15, color="red", zorder=5
         )
 
-    # Plot 2: Accuracy Comparison (Baseline vs Ablated vs Random)
+    # Plot 2: Accuracy Comparison (Baseline vs Ablated)
     ax2 = axes[0, 1]
     width = 0.35
     x = range(len(layers))
     ax2.bar(
-        [i - width for i in x], baseline_acc, width, label="Baseline", color="#06A77D", alpha=0.8
-    )
-    ax2.bar([i for i in x], ablation_acc, width, label="Ablated", color="#D81E5B", alpha=0.8)
-    ax2.bar(
-        [i + width for i in x],
-        random_acc,
+        [i - width / 2 for i in x],
+        baseline_acc,
         width,
-        label="Random Direction",
-        color="#F0A202",
-        alpha=0.6,
+        label="Baseline",
+        color="#06A77D",
+        alpha=0.8,
+    )
+    ax2.bar(
+        [i + width / 2 for i in x],
+        ablation_acc,
+        width,
+        label="Ablated",
+        color="#D81E5B",
+        alpha=0.8,
     )
     ax2.set_xlabel("Layer", fontsize=12, fontweight="bold")
     ax2.set_ylabel("Accuracy", fontsize=12, fontweight="bold")
@@ -553,8 +512,8 @@ def visualization(
     plt.tight_layout()
 
     # Save plot
-    plot_path = results_dir / f"ablation_analysis_{clean_name}.png"
-    plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+    plot_path = results_dir / f"ablation_analysis_{clean_name}.pdf"
+    plt.savefig(plot_path, bbox_inches="tight")
     print(f"Saved visualization to {plot_path}")
     plt.close()
 
@@ -581,18 +540,6 @@ def visualization(
         label="Ablated (Diff-Means Direction)",
         zorder=3,
     )
-    ax.plot(
-        layers,
-        random_acc,
-        marker="^",
-        linewidth=2,
-        markersize=6,
-        color="#F0A202",
-        label="Random Direction Control",
-        alpha=0.7,
-        linestyle="--",
-        zorder=2,
-    )
 
     ax.set_xlabel("Layer", fontsize=14, fontweight="bold")
     ax.set_ylabel("Accuracy", fontsize=14, fontweight="bold")
@@ -607,8 +554,8 @@ def visualization(
     )
 
     plt.tight_layout()
-    plot_path2 = results_dir / f"accuracy_by_layer_{clean_name}.png"
-    plt.savefig(plot_path2, dpi=300, bbox_inches="tight")
+    plot_path2 = results_dir / f"accuracy_by_layer_{clean_name}.pdf"
+    plt.savefig(plot_path2, bbox_inches="tight")
     print(f"Saved accuracy plot to {plot_path2}")
     plt.close()
 
@@ -649,8 +596,8 @@ def visualization(
         )
 
     plt.tight_layout()
-    plot_path3 = results_dir / f"effect_ranked_{clean_name}.png"
-    plt.savefig(plot_path3, dpi=300, bbox_inches="tight")
+    plot_path3 = results_dir / f"effect_ranked_{clean_name}.pdf"
+    plt.savefig(plot_path3, bbox_inches="tight")
     print(f"Saved ranked effect plot to {plot_path3}")
     plt.close()
 
@@ -779,7 +726,6 @@ if __name__ == "__main__":
                 diff_direction.to(config.device),
                 calibration_texts,
                 eval_pairs,
-                include_random_baseline=True,
             )
 
             # Store compact results
@@ -793,8 +739,6 @@ if __name__ == "__main__":
                         "baseline_accuracy": diff_results["baseline"]["accuracy"],
                         "ablation_accuracy": diff_results["ablation"]["accuracy"],
                         "ablation_effect": diff_results["ablation_effect"],
-                        "random_accuracy": diff_results.get("random_baseline", {}).get("accuracy"),
-                        "random_effect": diff_results.get("random_effect"),
                         "mean_projection": diff_results["mean_projection"],
                         "metadata": diff_results["direction_metadata"],
                     },
@@ -811,6 +755,78 @@ if __name__ == "__main__":
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+        # Save results and visualizations for this model
+        print(f"\n{'#' * 100}")
+        print(f"SAVING RESULTS FOR MODEL: {model_name}")
+        print(f"{'#' * 100}\n")
+
+        # Filter results for current model
+        model_results = [r for r in all_results if r["model"] == model_name]
+
+        # Generate timestamp for this model
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        clean_model_name = model_name.replace("/", "_").replace("-", "_")
+
+        # Save CSV for this model
+        model_csv_path = output_dir / f"summary_{clean_model_name}_{blimp_subset}_{timestamp}.csv"
+        with open(model_csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    "model",
+                    "layer",
+                    "method",
+                    "baseline_acc",
+                    "ablation_acc",
+                    "effect",
+                    "mean_proj",
+                ]
+            )
+
+            for result in model_results:
+                dm = result["diff_means"]
+                writer.writerow(
+                    [
+                        result["model"],
+                        result["layer"],
+                        "diff_means",
+                        f"{dm['baseline_accuracy']:.4f}",
+                        f"{dm['ablation_accuracy']:.4f}",
+                        f"{dm['ablation_effect']:.4f}",
+                        f"{dm['mean_projection']:.4f}",
+                    ]
+                )
+
+        print(f"Saved model CSV to {model_csv_path}")
+
+        # Save JSON for this model
+        model_json_path = (
+            output_dir / f"results_{clean_model_name}_{blimp_subset}_{timestamp}.json"
+        )
+        with open(model_json_path, "w") as f:
+            json.dump(
+                {
+                    "experiment_info": {
+                        "model": model_name,
+                        "num_layers": num_layers,
+                        "blimp_subset": blimp_subset,
+                        "discovery_pairs": len(discovery_pairs),
+                        "eval_pairs": len(eval_pairs),
+                        "calibration_samples": len(calibration_texts),
+                        "timestamp": timestamp,
+                    },
+                    "results": model_results,
+                },
+                f,
+                indent=2,
+            )
+
+        print(f"Saved model JSON to {model_json_path}")
+
+        # Generate visualizations for this model
+        print(f"Generating visualizations for {model_name}...")
+        visualization(model_results, output_dir, model_name)
+
         # Clean up model from memory and disk after processing all layers
         print(f"\nCleaning up {model_name}...")
         del ablator.model
@@ -823,7 +839,7 @@ if __name__ == "__main__":
 
     # Save summary CSV for easy analysis after all models are done
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary_path = output_dir / f"summary_{blimp_subset}_{timestamp}.csv"
+    summary_path = output_dir / f"summary_all_models_{blimp_subset}_{timestamp}.csv"
     with open(summary_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
@@ -834,8 +850,6 @@ if __name__ == "__main__":
                 "baseline_acc",
                 "ablation_acc",
                 "effect",
-                "random_acc",
-                "random_effect",
                 "mean_proj",
             ]
         )
@@ -853,13 +867,11 @@ if __name__ == "__main__":
                     f"{dm['baseline_accuracy']:.4f}",
                     f"{dm['ablation_accuracy']:.4f}",
                     f"{dm['ablation_effect']:.4f}",
-                    f"{dm.get('random_accuracy', 0):.4f}",
-                    f"{dm.get('random_effect', 0):.4f}",
                     f"{dm['mean_projection']:.4f}",
                 ]
             )
 
-    print(f"\nSummary CSV saved to {summary_path}")
+    print(f"\nAll models summary CSV saved to {summary_path}")
 
     # Save full results as JSON
     full_results_path = output_dir / f"full_results_{blimp_subset}_{timestamp}.json"
