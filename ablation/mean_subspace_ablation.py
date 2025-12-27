@@ -724,6 +724,24 @@ if __name__ == "__main__":
     output_dir = Path("cache/ablation_results")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    import gc
+    import shutil
+
+    def clear_model_cache():
+        """Clear HuggingFace cache to free disk space."""
+        cache_dirs = [
+            Path.home() / ".cache/huggingface/hub",
+            Path("/workspace/.cache/huggingface/hub"),
+        ]
+        for cache_dir in cache_dirs:
+            if cache_dir.exists():
+                for item in cache_dir.glob("models--*"):
+                    try:
+                        shutil.rmtree(item)
+                        print(f"Cleared cache: {item.name}")
+                    except Exception as e:
+                        print(f"Failed to clear {item}: {e}")
+
     for model_name, num_layers in model_layers.items():
         print(f"\n\n{'#' * 100}")
         print(f"RUNNING EXPERIMENT FOR MODEL: {model_name} with {num_layers} layers")
@@ -792,6 +810,16 @@ if __name__ == "__main__":
             # Clean up GPU memory after each layer
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+        # Clean up model from memory and disk after processing all layers
+        print(f"\nCleaning up {model_name}...")
+        del ablator.model
+        del ablator
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        clear_model_cache()
+        print(f"Cleanup complete for {model_name}\n")
 
     # Save summary CSV for easy analysis after all models are done
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
