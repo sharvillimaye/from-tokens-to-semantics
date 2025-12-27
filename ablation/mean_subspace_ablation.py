@@ -680,9 +680,9 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(SEED)
 
     model_layers: dict[str, int] = {
-        "EleutherAI/pythia-70m": 6,
-        "EleutherAI/pythia-1b": 16,
-        "EleutherAI/pythia-2.8b": 32,
+        "EleutherAI/pythia-70m-deduped": 6,
+        "EleutherAI/pythia-1b-deduped": 16,
+        "EleutherAI/pythia-2.8b-deduped": 32,
         "allenai/OLMo-1B-hf": 16,
         "allenai/OLMo-7B-hf": 32,
         "Qwen/Qwen2.5-1.5B": 28,
