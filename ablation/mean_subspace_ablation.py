@@ -706,7 +706,7 @@ if __name__ == "__main__":
 
     discovery_pairs = pairs[:100]
     calibration_pairs = pairs[100:150]
-    eval_pairs = pairs[150:]
+    eval_pairs = pairs[150:450]  # 300 samples - good balance of speed vs precision
 
     print(
         f"Data split: {len(discovery_pairs)} discovery, {len(calibration_pairs)} calibration, {len(eval_pairs)} eval"
