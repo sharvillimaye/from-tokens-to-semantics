@@ -570,7 +570,7 @@ def visualization(
     sorted_effects = [ablation_effect[i] for i in sorted_indices]
 
     colors_sorted = ["#D81E5B" if e > 0 else "#2E86AB" for e in sorted_effects]
-    bars = ax.barh(
+    _ = ax.barh(
         range(len(sorted_layers)),
         sorted_effects,
         color=colors_sorted,
@@ -627,9 +627,9 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(SEED)
 
     model_layers: dict[str, int] = {
-        "EleutherAI/pythia-70m-deduped": 6,
-        "EleutherAI/pythia-1b-deduped": 16,
-        "EleutherAI/pythia-2.8b-deduped": 32,
+        # "EleutherAI/pythia-70m-deduped": 6,
+        # "EleutherAI/pythia-1b-deduped": 16,
+        # "EleutherAI/pythia-2.8b-deduped": 32,
         "allenai/OLMo-1B-hf": 16,
         "allenai/OLMo-7B-hf": 32,
         "Qwen/Qwen2.5-1.5B": 28,
@@ -717,7 +717,7 @@ if __name__ == "__main__":
                 positive_texts, negative_texts, layer_idx=layer
             )
 
-            print(f"\n--- Diff-Means Direction ---")
+            print("\n--- Diff-Means Direction ---")
             diff_direction = DirectionDiscovery.from_diff_means(
                 pos_acts, neg_acts, layer, name=f"layer{layer}_diffmeans"
             )
