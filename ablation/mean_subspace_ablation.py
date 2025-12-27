@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import warnings
 
-from nnsight import LanguageModel
+from nnterp import StandardizedTransformer
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
@@ -157,89 +157,92 @@ class DirectionDiscovery:
 
 
 class MeanSubspaceAblation:
-    """Main class for mean subspace ablation experiments."""
+    """Main class for mean subspace ablation experiments.
+
+    Uses nnterp's StandardizedTransformer for architecture-agnostic model access.
+    Supports: Pythia, OLMo, Llama, Qwen, Gemma, and other transformer architectures.
+    """
 
     def __init__(self, config: AblationConfig):
         self.config = config
         self.device = config.device
-        self.model: Any = None
-        self._arch_info: Optional[Dict[str, Any]] = None
+        self.model: Optional[StandardizedTransformer] = None
 
     def load_model(self, revision: Optional[str] = None) -> None:
-        """Load model using nnsight."""
+        """Load model using nnterp's StandardizedTransformer.
+
+        This provides architecture-agnostic access to layers and activations.
+        """
         print(f"Loading model: {self.config.model_name}")
-        kwargs = {"device_map": self.config.device, "torch_dtype": self.config.torch_dtype}
+        kwargs: Dict[str, Any] = {
+            "device_map": self.config.device,
+            "torch_dtype": self.config.torch_dtype,
+        }
         if revision:
             kwargs["revision"] = revision
 
-        self.model = LanguageModel(self.config.model_name, **kwargs)  # type: ignore
-        self.model.eval()
-        self._arch_info = self._detect_architecture()
-        print(f"Detected architecture: {self._arch_info['type']}")
+        self.model = StandardizedTransformer(self.config.model_name, **kwargs)
+        print(
+            f"Loaded model with {self.model.num_layers} layers, hidden_size={self.model.hidden_size}"
+        )
 
-    def _detect_architecture(self) -> Dict[str, Any]:
-        """Detect model architecture and return access patterns."""
-        if hasattr(self.model, "gpt_neox"):  # Pythia
-            return {
-                "type": "pythia",
-                "layer_access": lambda idx: self.model.gpt_neox.layers[idx],  # type: ignore
-                "residual_stream": lambda layer: layer.input[0],
-                "mlp_output": lambda layer: layer.mlp.output,
-                "attn_output": lambda layer: layer.attention.output,
-            }
-        if hasattr(self.model, "transformer") and hasattr(
-            self.model.transformer, "blocks"
-        ):  # OLMo
-            return {
-                "type": "olmo",
-                "layer_access": lambda idx: self.model.transformer.blocks[idx],  # type: ignore
-                "residual_stream": lambda layer: layer.input[0],
-                "mlp_output": lambda layer: layer.feed_forward.output,
-                "attn_output": lambda layer: layer.attention.output,
-            }
-        if hasattr(self.model, "model") and hasattr(self.model.model, "layers"):  # Llama
-            return {
-                "type": "llama",
-                "layer_access": lambda idx: self.model.model.layers[idx],  # type: ignore
-                "residual_stream": lambda layer: layer.input[0],
-                "mlp_output": lambda layer: layer.mlp.output,
-                "attn_output": lambda layer: layer.self_attn.output,
-            }
-        raise ValueError("Unsupported model architecture")
+    def _get_activations_accessor(self, layer_idx: int) -> Any:
+        """Get activation accessor based on target_component config.
 
-    def _get_activation_hook_point(self, layer_proxy) -> Any:
-        """Get activation hook point based on target_component config."""
-        if self._arch_info is None:
-            raise RuntimeError("Architecture info not detected. Call load_model() first.")
-        component_map = {
-            "residual": "residual_stream",
-            "mlp": "mlp_output",
-            "attention": "attn_output",
-        }
-        if self.config.target_component not in component_map:
+        Uses nnterp's standardized accessors for architecture-agnostic access.
+        """
+        if self.model is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        if self.config.target_component == "residual":
+            return self.model.layers_input[layer_idx]
+        elif self.config.target_component == "mlp":
+            return self.model.mlps_output[layer_idx]
+        elif self.config.target_component == "attention":
+            return self.model.attentions_output[layer_idx]
+        else:
             raise ValueError(f"Unknown target component: {self.config.target_component}")
-        return self._arch_info[component_map[self.config.target_component]](layer_proxy)  # type: ignore
+
+    def _set_activations(self, layer_idx: int, value: Any) -> None:
+        """Set activations at a layer based on target_component config."""
+        if self.model is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        if self.config.target_component == "residual":
+            self.model.layers_input[layer_idx] = value
+        elif self.config.target_component == "mlp":
+            self.model.mlps_output[layer_idx] = value
+        elif self.config.target_component == "attention":
+            self.model.attentions_output[layer_idx] = value
+        else:
+            raise ValueError(f"Unknown target component: {self.config.target_component}")
 
     def _extract_at_position(self, act_tensor: torch.Tensor) -> torch.Tensor:
-        """Extract activations at last position."""
-        return act_tensor[:, -1, :]
+        """Extract activations at last position.
+        Handles cases where sequence_length dimension might be squeezed.
+        """
+        if act_tensor.dim() == 3:
+            return act_tensor[:, -1, :]
+        elif act_tensor.dim() == 2:
+            return act_tensor
+        else:
+            raise ValueError(f"Unexpected activation tensor dimension: {act_tensor.dim()}")
 
     def extract_activations(self, texts: List[str], layer_idx: Optional[int] = None) -> np.ndarray:
         """Extract activations from model for given texts."""
-        if self.model is None or self._arch_info is None:
+        if self.model is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
-        layer_idx = layer_idx or self.config.layer_idx
+        layer_idx = layer_idx if layer_idx is not None else self.config.layer_idx
         all_activations = []
         batch_size = self.config.calibration_batch_size
 
         for batch_start in tqdm(range(0, len(texts), batch_size), desc="Extracting activations"):
             batch_texts = texts[batch_start : batch_start + batch_size]
             with torch.no_grad():
-                with self.model.trace(batch_texts):  # type: ignore
-                    layer_proxy = self._arch_info["layer_access"](layer_idx)  # type: ignore
-                    activations = self._get_activation_hook_point(layer_proxy).save()
-                    _ = self.model.output  # type: ignore
+                with self.model.trace(batch_texts):
+                    activations = self._get_activations_accessor(layer_idx).save()
+                    _ = self.model.output
 
             batch_acts = self._extract_at_position(activations)
             all_activations.append(batch_acts.cpu().numpy())
@@ -261,7 +264,7 @@ class MeanSubspaceAblation:
 
     def calibrate(self, direction: SubspaceDirection, calibration_texts: List[str]) -> float:
         """Compute mean projection onto direction for calibration."""
-        if self.model is None or self._arch_info is None:
+        if self.model is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
         print(f"Calibrating on {len(calibration_texts)} samples...")
         direction_vec = direction.vector.to(self.device)
@@ -271,18 +274,17 @@ class MeanSubspaceAblation:
         for batch_start in tqdm(range(0, len(calibration_texts), batch_size), desc="Calibrating"):
             batch_texts = calibration_texts[batch_start : batch_start + batch_size]
             with torch.no_grad():
-                with self.model.trace(batch_texts):  # type: ignore
-                    layer_proxy = self._arch_info["layer_access"](direction.layer_idx)  # type: ignore
-                    activations = self._get_activation_hook_point(layer_proxy).save()
-                    _ = self.model.output  # type: ignore
+                with self.model.trace(batch_texts):
+                    activations = self._get_activations_accessor(direction.layer_idx).save()
+                    _ = self.model.output
 
             batch_acts = self._extract_at_position(activations)
             projections = torch.matmul(batch_acts.float(), direction_vec.float())
             all_projections.append(projections.cpu())
 
-        all_projections = torch.cat(all_projections)
-        mean_proj = float(all_projections.mean())
-        print(f"Mean projection: {mean_proj:.4f} (std: {float(all_projections.std()):.4f})")
+        all_projections_tensor = torch.cat(all_projections)
+        mean_proj = float(all_projections_tensor.mean())
+        print(f"Mean projection: {mean_proj:.4f} (std: {float(all_projections_tensor.std()):.4f})")
         return mean_proj
 
     def get_logprobs(
@@ -291,27 +293,33 @@ class MeanSubspaceAblation:
         direction: Optional[SubspaceDirection] = None,
         mean_proj: Optional[float] = 0.0,
     ) -> float:
-        """Compute log probability of text, optionally with ablation."""
-        if self.model is None or self._arch_info is None:
+        """Compute log probability of text, optionally with ablation.
+
+        Ablation formula: x_new = x - (x · v) * v + μ * v
+        Which simplifies to: x_new = x + (μ - x · v) * v
+        """
+        if self.model is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
         if direction is not None and mean_proj is None:
             raise ValueError("mean_proj required when direction is provided")
 
         with torch.no_grad():
-            with self.model.trace(text):  # type: ignore
+            with self.model.trace(text):
                 if direction is not None:
                     direction_vec = direction.vector.to(self.device).float()
-                    layer_proxy = self._arch_info["layer_access"](direction.layer_idx)  # type: ignore
-                    x = self._get_activation_hook_point(layer_proxy)
+                    x = self._get_activations_accessor(direction.layer_idx)
 
                     # Ablation: x_new = x + (mean_proj - current_proj) * v
-                    current_proj = torch.matmul(x.float(), direction_vec).unsqueeze(-1)
-                    x[:] = x + (mean_proj - current_proj) * direction_vec  # type: ignore
+                    # x has shape [B, S, H], direction_vec has shape [H]
+                    current_proj = torch.matmul(x.float(), direction_vec)  # [B, S]
+                    # Expand for broadcasting: [B, S, 1] * [H] -> [B, S, H]
+                    ablation_delta = (mean_proj - current_proj).unsqueeze(-1) * direction_vec
+                    self._set_activations(direction.layer_idx, x + ablation_delta)
 
-                logits = self.model.output.logits.save()  # type: ignore
+                logits = self.model.output.logits.save()
 
         logits_val = logits
-        tokens = self.model.tokenizer(text, return_tensors="pt")["input_ids"].to(self.device)  # type: ignore
+        tokens = self.model.tokenizer(text, return_tensors="pt")["input_ids"].to(self.device)
         log_probs = torch.nn.functional.log_softmax(logits_val, dim=-1)
 
         return sum(log_probs[0, i - 1, tokens[0, i]].item() for i in range(1, tokens.shape[1]))
@@ -660,6 +668,15 @@ def load_blimp_minimal_pairs(
 if __name__ == "__main__":
     import csv
     from datetime import datetime
+    import random
+
+    # Set random seeds for reproducibility
+    SEED = 42
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(SEED)
 
     model_layers: dict[str, int] = {
         "EleutherAI/pythia-70m": 6,
@@ -675,11 +692,29 @@ if __name__ == "__main__":
 
     print("Loading BLiMP dataset...")
     pairs = load_blimp_minimal_pairs(blimp_subset, max_pairs=max_pairs)
-    discovery_pairs, eval_pairs = pairs[:100], pairs[100:]
+
+    # Split into non-overlapping sets to avoid data leakage:
+    # - discovery_pairs: used to find the ablation direction (diff of means)
+    # - calibration_pairs: used to compute mean projection for ablation
+    # - eval_pairs: used to evaluate the effect of ablation
+    if len(pairs) < 200:
+        raise ValueError(
+            f"Insufficient pairs in BLiMP subset '{blimp_subset}': {len(pairs)} < 200. "
+            "Need at least 100 for discovery, 50 for calibration, and 50 for evaluation."
+        )
+
+    discovery_pairs = pairs[:100]
+    calibration_pairs = pairs[100:150]
+    eval_pairs = pairs[150:]
+
+    print(
+        f"Data split: {len(discovery_pairs)} discovery, {len(calibration_pairs)} calibration, {len(eval_pairs)} eval"
+    )
 
     positive_texts = [p[0] for p in discovery_pairs]
     negative_texts = [p[1] for p in discovery_pairs]
-    calibration_texts = positive_texts[:50] + negative_texts[:50]
+    # Calibration uses separate, non-overlapping data
+    calibration_texts = [p[0] for p in calibration_pairs] + [p[1] for p in calibration_pairs]
 
     # Storage for all results
     all_results = []
@@ -752,6 +787,10 @@ if __name__ == "__main__":
             print(f"LAYER {layer} SUMMARY:")
             print(f"  Diff-Means: {diff_results['ablation_effect']:+.2%} effect")
             print(f"{'=' * 80}")
+
+            # Clean up GPU memory after each layer
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     # Save summary CSV for easy analysis after all models are done
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
