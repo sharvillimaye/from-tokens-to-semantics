@@ -306,12 +306,13 @@ class MeanSubspaceAblation:
         with torch.no_grad():
             with self.model.trace(text):
                 if direction is not None:
-                    direction_vec = direction.vector.to(self.device).float()
                     x = self._get_activations_accessor(direction.layer_idx)
+                    # Match direction vector dtype to activation dtype (float16/bfloat16)
+                    direction_vec = direction.vector.to(device=self.device, dtype=x.dtype)
 
                     # Ablation: x_new = x + (mean_proj - current_proj) * v
                     # x has shape [B, S, H], direction_vec has shape [H]
-                    current_proj = torch.matmul(x.float(), direction_vec)  # [B, S]
+                    current_proj = torch.matmul(x, direction_vec)  # [B, S]
                     # Expand for broadcasting: [B, S, 1] * [H] -> [B, S, H]
                     ablation_delta = (mean_proj - current_proj).unsqueeze(-1) * direction_vec
                     self._set_activations(direction.layer_idx, x + ablation_delta)
