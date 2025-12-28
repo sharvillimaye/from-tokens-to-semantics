@@ -16,19 +16,23 @@ Main Components:
    - Supports diff-means, PCA, and custom directions
 
 3. SubspaceDirection
-   - Data class representing a direction to ablate
+   - Data class representing a single direction to ablate
    - Includes metadata about how the direction was discovered
 
-4. PolytopeDirectionDiscovery
+4. SubspaceDirections
+   - Data class for multi-direction ablation (top-k PCA components)
+   - Enables simultaneous ablation of multiple orthonormal directions
+
+5. PolytopeDirectionDiscovery
    - Discovers directions from polytope analysis data
    - Integrates with checkpoint_analysis.py records
 
-5. PolytopeAblationExperiment
+6. PolytopeAblationExperiment
    - High-level experiment runner for polytope-based ablation
    - Compares effects across layers and checkpoints
 
-Usage Example:
-==============
+Usage Example (Single Direction):
+=================================
 
     from ablation import MeanSubspaceAblation, AblationConfig, DirectionDiscovery
 
@@ -44,6 +48,25 @@ Usage Example:
     # Calibrate and run experiment
     mean_proj = ablator.calibrate(direction, calibration_texts)
     results = ablator.evaluate_minimal_pairs(eval_pairs, direction, mean_proj)
+
+Usage Example (Multi-Direction Subspace):
+=========================================
+
+    from ablation import MeanSubspaceAblation, AblationConfig, DirectionDiscovery
+
+    # Setup
+    config = AblationConfig(model_name="allenai/OLMo-1B-hf", layer_idx=8)
+    ablator = MeanSubspaceAblation(config)
+    ablator.load_model()
+
+    # Discover subspace from activations (top-5 PCA components)
+    pos_acts, neg_acts = ablator.extract_paired_activations(good_texts, bad_texts)
+    subspace = DirectionDiscovery.from_pca_on_diff_subspace(
+        pos_acts, neg_acts, layer_idx=8, n_components=5
+    )
+
+    # Calibrate and run experiment
+    results = ablator.run_ablation_experiment_subspace(subspace, calibration_texts, eval_pairs)
 """
 
 from .mean_subspace_ablation import (
@@ -51,6 +74,7 @@ from .mean_subspace_ablation import (
     DirectionDiscovery,
     MeanSubspaceAblation,
     SubspaceDirection,
+    SubspaceDirections,
     load_blimp_minimal_pairs,
 )
 
@@ -59,6 +83,7 @@ __all__ = [
     "MeanSubspaceAblation",
     "AblationConfig",
     "SubspaceDirection",
+    "SubspaceDirections",
     "DirectionDiscovery",
     "load_blimp_minimal_pairs",
 ]

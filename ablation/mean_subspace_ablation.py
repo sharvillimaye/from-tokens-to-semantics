@@ -66,6 +66,54 @@ class SubspaceDirection:
         )
 
 
+@dataclass
+class SubspaceDirections:
+    """A subspace in activation space for multi-direction ablation.
+
+    Holds multiple orthonormal directions (e.g., top-k PCA components) for
+    simultaneous ablation. The ablation formula becomes:
+
+        x_new = x - V @ V.T @ x + V @ μ
+
+    Where V is the matrix of orthonormal directions and μ contains the mean
+    projections for each direction.
+    """
+
+    vectors: torch.Tensor  # Shape: [hidden_dim, k] - orthonormal columns
+    layer_idx: int
+    name: str = "unnamed"
+    discovery_method: str = "unknown"
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Ensure vectors are orthonormal (PCA components already are, but normalize for safety)
+        # vectors shape: [hidden_dim, k]
+        if self.vectors.dim() == 1:
+            # Single vector passed, reshape to [hidden_dim, 1]
+            self.vectors = self.vectors.unsqueeze(1)
+
+        # Normalize each column to unit norm
+        norms = torch.norm(self.vectors, dim=0, keepdim=True)
+        self.vectors = self.vectors / norms.clamp(min=1e-8)
+
+    @property
+    def hidden_dim(self) -> int:
+        return self.vectors.shape[0]
+
+    @property
+    def n_components(self) -> int:
+        return self.vectors.shape[1]
+
+    def to(self, device: str) -> "SubspaceDirections":
+        return SubspaceDirections(
+            vectors=self.vectors.to(device),
+            layer_idx=self.layer_idx,
+            name=self.name,
+            discovery_method=self.discovery_method,
+            metadata=self.metadata,
+        )
+
+
 class DirectionDiscovery:
     """Methods for discovering meaningful directions in activation space."""
 
@@ -138,6 +186,72 @@ class DirectionDiscovery:
                 "component": component,
                 "explained_variance_ratio": float(pca.explained_variance_ratio_[component]),
                 "n_pairs": len(differences),
+            },
+        )
+
+    @staticmethod
+    def from_pca_on_diff_subspace(
+        activations_positive: np.ndarray,
+        activations_negative: np.ndarray,
+        layer_idx: int,
+        n_components: int = 5,
+        variance_threshold: Optional[float] = None,
+        name: Optional[str] = None,
+    ) -> SubspaceDirections:
+        """PCA on pairwise differences returning top-k subspace for multi-direction ablation.
+
+        Args:
+            activations_positive: Activations for positive examples, shape [n_samples, hidden_dim]
+            activations_negative: Activations for negative examples, shape [n_samples, hidden_dim]
+            layer_idx: Layer index these activations came from
+            n_components: Number of top principal components to include (default: 5)
+            variance_threshold: If provided, select components until cumulative explained
+                variance reaches this threshold (e.g., 0.9 for 90%). Overrides n_components.
+            name: Optional name for the subspace
+
+        Returns:
+            SubspaceDirections containing the top-k orthonormal directions
+        """
+        assert len(activations_positive) == len(activations_negative), (
+            "Need paired data with same number of samples"
+        )
+
+        differences = activations_positive - activations_negative
+        scaler = StandardScaler()
+        pca = PCA()
+        pca.fit(scaler.fit_transform(differences))
+
+        # Determine number of components to use
+        requested_n_components = n_components
+        if variance_threshold is not None:
+            cumulative_variance = np.cumsum(pca.explained_variance_ratio_)
+            n_components = int(np.searchsorted(cumulative_variance, variance_threshold) + 1)
+            n_components = min(n_components, len(pca.components_))
+
+        # Ensure we don't exceed available components (limited by min(n_samples, hidden_dim))
+        max_components = len(pca.components_)
+        n_components = min(n_components, max_components)
+
+        if n_components < requested_n_components and variance_threshold is None:
+            print(f"Warning: Requested {requested_n_components} components but only {max_components} available. Using {n_components}.")
+
+        # Extract top-k components: pca.components_ has shape [n_components, hidden_dim]
+        # We want [hidden_dim, k] for our convention
+        top_k_components = pca.components_[:n_components].T  # [hidden_dim, k]
+
+        cumulative_variance = float(np.sum(pca.explained_variance_ratio_[:n_components]))
+
+        return SubspaceDirections(
+            vectors=torch.tensor(top_k_components, dtype=torch.float32),
+            layer_idx=layer_idx,
+            name=name or f"diff_pca_subspace_k{n_components}",
+            discovery_method="pca_on_diff_subspace",
+            metadata={
+                "n_components": n_components,
+                "explained_variance_ratios": pca.explained_variance_ratio_[:n_components].tolist(),
+                "cumulative_explained_variance": cumulative_variance,
+                "n_pairs": len(differences),
+                "variance_threshold": variance_threshold,
             },
         )
 
@@ -273,6 +387,48 @@ class MeanSubspaceAblation:
         print(f"Mean projection: {mean_proj:.4f} (std: {float(all_projections_tensor.std()):.4f})")
         return mean_proj
 
+    def calibrate_subspace(
+        self, subspace: SubspaceDirections, calibration_texts: List[str]
+    ) -> torch.Tensor:
+        """Compute mean projections onto each direction in the subspace.
+
+        Args:
+            subspace: SubspaceDirections containing k orthonormal directions
+            calibration_texts: Texts to use for computing mean projections
+
+        Returns:
+            Tensor of shape [k] containing mean projection for each direction
+        """
+        if self.model is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        print(f"Calibrating subspace ({subspace.n_components} components) on {len(calibration_texts)} samples...")
+        # subspace.vectors has shape [hidden_dim, k]
+        direction_matrix = subspace.vectors.to(self.device)
+        all_projections = []
+        batch_size = self.config.calibration_batch_size
+
+        for batch_start in tqdm(range(0, len(calibration_texts), batch_size), desc="Calibrating subspace"):
+            batch_texts = calibration_texts[batch_start : batch_start + batch_size]
+            with torch.no_grad():
+                with self.model.trace(batch_texts):
+                    activations = self._get_activations_accessor(subspace.layer_idx).save()
+                    _ = self.model.output
+
+            batch_acts = self._extract_at_position(activations)
+            # batch_acts: [B, H], direction_matrix: [H, k]
+            # projections: [B, k] - projection onto each of the k directions
+            projections = torch.matmul(batch_acts.float(), direction_matrix.float())
+            all_projections.append(projections.cpu())
+
+        all_projections_tensor = torch.cat(all_projections, dim=0)  # [N, k]
+        mean_projs = all_projections_tensor.mean(dim=0)  # [k]
+        stds = all_projections_tensor.std(dim=0)
+
+        print(f"Mean projections per component: {mean_projs.tolist()}")
+        print(f"Std per component: {stds.tolist()}")
+        return mean_projs
+
     def get_logprobs(
         self,
         text: str,
@@ -343,6 +499,104 @@ class MeanSubspaceAblation:
             "ablation_applied": direction is not None,
         }
 
+    def get_logprobs_subspace(
+        self,
+        text: str,
+        subspace: Optional[SubspaceDirections] = None,
+        mean_projs: Optional[torch.Tensor] = None,
+    ) -> float:
+        """Compute log probability of text, optionally with multi-direction subspace ablation.
+
+        Multi-direction ablation formula:
+            x_new = x - V @ V.T @ x + V @ μ
+        Which can be rewritten as:
+            proj = x @ V           # [B, S, k] - project onto each direction
+            delta = μ - proj       # [B, S, k] - difference from mean for each
+            x_new = x + delta @ V.T  # [B, S, H] - apply correction
+
+        Args:
+            text: Input text to evaluate
+            subspace: Optional SubspaceDirections for ablation
+            mean_projs: Tensor of shape [k] with mean projection per direction
+
+        Returns:
+            Total log probability of the text
+        """
+        if self.model is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+        if subspace is not None and mean_projs is None:
+            raise ValueError("mean_projs required when subspace is provided")
+
+        with torch.no_grad():
+            with self.model.trace(text):
+                if subspace is not None:
+                    x = self._get_activations_accessor(subspace.layer_idx)
+                    # Match direction vectors dtype to activation dtype
+                    # subspace.vectors: [H, k]
+                    V = subspace.vectors.to(device=self.device, dtype=x.dtype)
+                    mu = mean_projs.to(device=self.device, dtype=x.dtype)  # [k]
+
+                    # x has shape [B, S, H], V has shape [H, k]
+                    # Project onto each direction: [B, S, k]
+                    current_proj = torch.matmul(x, V)
+
+                    # Compute delta from mean for each direction: [k] - [B, S, k] -> [B, S, k]
+                    delta = mu - current_proj
+
+                    # Apply correction in original space: [B, S, k] @ [k, H] -> [B, S, H]
+                    ablation_delta = torch.matmul(delta, V.T)
+                    self._set_activations(subspace.layer_idx, x + ablation_delta)
+
+                logits = self.model.output.logits.save()
+
+        logits_val = logits
+        tokens = self.model.tokenizer(text, return_tensors="pt")["input_ids"].to(self.device)
+        log_probs = torch.nn.functional.log_softmax(logits_val, dim=-1)
+
+        return sum(log_probs[0, i - 1, tokens[0, i]].item() for i in range(1, tokens.shape[1]))
+
+    def evaluate_minimal_pairs_subspace(
+        self,
+        pairs: List[Tuple[str, str]],
+        subspace: Optional[SubspaceDirections] = None,
+        mean_projs: Optional[torch.Tensor] = None,
+        desc: str = "Evaluating",
+    ) -> Dict[str, Any]:
+        """Evaluate on minimal pairs with multi-direction subspace ablation.
+
+        Args:
+            pairs: List of (good_sentence, bad_sentence) tuples
+            subspace: Optional SubspaceDirections for ablation
+            mean_projs: Tensor of shape [k] with mean projection per direction
+
+        Returns:
+            Dictionary with accuracy, correct count, and detailed results
+        """
+        results = []
+        for good_sent, bad_sent in tqdm(pairs, desc=desc):
+            good_lp = self.get_logprobs_subspace(good_sent, subspace, mean_projs)
+            bad_lp = self.get_logprobs_subspace(bad_sent, subspace, mean_projs)
+            results.append(
+                {
+                    "good_sentence": good_sent,
+                    "bad_sentence": bad_sent,
+                    "good_logprob": good_lp,
+                    "bad_logprob": bad_lp,
+                    "correct": good_lp > bad_lp,
+                    "margin": good_lp - bad_lp,
+                }
+            )
+
+        correct = sum(r["correct"] for r in results)
+        return {
+            "accuracy": correct / len(results) if results else 0.0,
+            "correct": correct,
+            "total": len(results),
+            "results": results,
+            "ablation_applied": subspace is not None,
+            "n_components": subspace.n_components if subspace else 0,
+        }
+
     def run_ablation_experiment(
         self,
         direction: SubspaceDirection,
@@ -377,6 +631,53 @@ class MeanSubspaceAblation:
 
         return results
 
+    def run_ablation_experiment_subspace(
+        self,
+        subspace: SubspaceDirections,
+        calibration_texts: List[str],
+        eval_pairs: List[Tuple[str, str]],
+    ) -> Dict[str, Any]:
+        """Run complete multi-direction subspace ablation experiment with baseline.
+
+        Args:
+            subspace: SubspaceDirections containing k orthonormal directions
+            calibration_texts: Texts for computing mean projections
+            eval_pairs: List of (good_sentence, bad_sentence) for evaluation
+
+        Returns:
+            Dictionary with baseline, ablation results, and effect metrics
+        """
+        results = {
+            "subspace_name": subspace.name,
+            "layer_idx": subspace.layer_idx,
+            "discovery_method": subspace.discovery_method,
+            "n_components": subspace.n_components,
+            "subspace_metadata": subspace.metadata,
+        }
+
+        # Baseline (no ablation)
+        print("\n=== Baseline (No Ablation) ===")
+        baseline = self.evaluate_minimal_pairs_subspace(eval_pairs, desc="Baseline")
+        results["baseline"] = baseline
+        print(f"Baseline accuracy: {baseline['accuracy']:.2%}")
+
+        # Calibrate subspace
+        print(f"\n=== Calibrating Subspace ({subspace.n_components} components) ===")
+        mean_projs = self.calibrate_subspace(subspace, calibration_texts)
+        results["mean_projections"] = mean_projs.tolist()
+
+        # Ablation evaluation
+        print("\n=== Subspace Ablation Evaluation ===")
+        ablation = self.evaluate_minimal_pairs_subspace(
+            eval_pairs, subspace, mean_projs, desc=f"Ablated (k={subspace.n_components})"
+        )
+        results["ablation"] = ablation
+        effect = baseline["accuracy"] - ablation["accuracy"]
+        results["ablation_effect"] = effect
+        print(f"Ablated accuracy: {ablation['accuracy']:.2%} (effect: {effect:+.2%})")
+
+        return results
+
 
 def visualization(
     results: List[Dict[str, Any]],
@@ -389,7 +690,7 @@ def visualization(
         results: List of result dictionaries, each containing:
             - layer: int
             - diff_means: dict with ablation_effect
-            - pca_on_diff: dict with ablation_effect
+            - pca_on_diff_subspace: dict with ablation_effect and n_components
         results_dir: Directory to save plots
         model_name: Name of the model (for plot titles and filenames)
     """
@@ -398,18 +699,21 @@ def visualization(
     # Extract data for both methods
     layers = [r["layer"] for r in results]
     dm = [r["diff_means"] for r in results]
-    pca = [r["pca_on_diff"] for r in results]
+    pca_subspace = [r["pca_on_diff_subspace"] for r in results]
 
     # Ablation effect data
     dm_ablation_effect = [d["ablation_effect"] for d in dm]
-    pca_ablation_effect = [p["ablation_effect"] for p in pca]
+    pca_subspace_ablation_effect = [p["ablation_effect"] for p in pca_subspace]
+
+    # Get n_components for label (should be same across layers)
+    n_components = pca_subspace[0].get("n_components", "k")
 
     # Clean model name for filename
     clean_name = model_name.replace("/", "_").replace("-", "_")
 
     # Create single figure showing ablation effect by layer
     fig, ax = plt.subplots(figsize=(12, 6))
-    
+
     ax.plot(
         layers,
         dm_ablation_effect,
@@ -417,20 +721,20 @@ def visualization(
         linewidth=2,
         markersize=8,
         color="#2E86AB",
-        label="Diff-Means",
+        label="Diff-Means (1D)",
     )
     ax.plot(
         layers,
-        pca_ablation_effect,
+        pca_subspace_ablation_effect,
         marker="s",
         linewidth=2,
         markersize=8,
         color="#E94F37",
-        label="PCA-on-Diff",
+        label=f"PCA-on-Diff Subspace (k={n_components})",
     )
     ax.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
     ax.fill_between(layers, dm_ablation_effect, 0, alpha=0.2, color="#2E86AB")
-    ax.fill_between(layers, pca_ablation_effect, 0, alpha=0.2, color="#E94F37")
+    ax.fill_between(layers, pca_subspace_ablation_effect, 0, alpha=0.2, color="#E94F37")
     ax.set_xlabel("Layer", fontsize=12, fontweight="bold")
     ax.set_ylabel("Ablation Effect (Δ Accuracy)", fontsize=12, fontweight="bold")
     ax.set_title(f"Ablation Effect by Layer: {model_name}", fontsize=14, fontweight="bold")
@@ -604,13 +908,13 @@ if __name__ == "__main__":
                     eval_pairs,
                 )
 
-                print("\n--- PCA on Differences Direction ---")
-                pca_diff_direction = DirectionDiscovery.from_pca_on_diff(
-                    pos_acts, neg_acts, layer, component=0, name=f"layer{layer}_pca_diff"
+                print("\n--- PCA on Differences Subspace (Multi-Direction) ---")
+                pca_diff_subspace = DirectionDiscovery.from_pca_on_diff_subspace(
+                    pos_acts, neg_acts, layer, n_components=5, name=f"layer{layer}_pca_diff_subspace"
                 )
 
-                pca_diff_results = ablator.run_ablation_experiment(
-                    pca_diff_direction.to(config.device),
+                pca_subspace_results = ablator.run_ablation_experiment_subspace(
+                    pca_diff_subspace.to(config.device),
                     calibration_texts,
                     eval_pairs,
                 )
@@ -629,14 +933,15 @@ if __name__ == "__main__":
                             "mean_projection": diff_results["mean_projection"],
                             "metadata": diff_results["direction_metadata"],
                         },
-                        "pca_on_diff": {
-                            "direction_name": pca_diff_results["direction_name"],
-                            "discovery_method": pca_diff_results["discovery_method"],
-                            "baseline_accuracy": pca_diff_results["baseline"]["accuracy"],
-                            "ablation_accuracy": pca_diff_results["ablation"]["accuracy"],
-                            "ablation_effect": pca_diff_results["ablation_effect"],
-                            "mean_projection": pca_diff_results["mean_projection"],
-                            "metadata": pca_diff_results["direction_metadata"],
+                        "pca_on_diff_subspace": {
+                            "subspace_name": pca_subspace_results["subspace_name"],
+                            "discovery_method": pca_subspace_results["discovery_method"],
+                            "n_components": pca_subspace_results["n_components"],
+                            "baseline_accuracy": pca_subspace_results["baseline"]["accuracy"],
+                            "ablation_accuracy": pca_subspace_results["ablation"]["accuracy"],
+                            "ablation_effect": pca_subspace_results["ablation_effect"],
+                            "mean_projections": pca_subspace_results["mean_projections"],
+                            "metadata": pca_subspace_results["subspace_metadata"],
                         },
                     }
                 )
@@ -644,8 +949,8 @@ if __name__ == "__main__":
                 # Print layer summary
                 print(f"\n{'=' * 80}")
                 print(f"LAYER {layer} SUMMARY:")
-                print(f"  Diff-Means: {diff_results['ablation_effect']:+.2%} effect")
-                print(f"  PCA-on-Diff: {pca_diff_results['ablation_effect']:+.2%} effect")
+                print(f"  Diff-Means (1D): {diff_results['ablation_effect']:+.2%} effect")
+                print(f"  PCA-on-Diff Subspace (k={pca_subspace_results['n_components']}): {pca_subspace_results['ablation_effect']:+.2%} effect")
                 print(f"{'=' * 80}")
 
                 # Clean up GPU memory after each layer
@@ -673,10 +978,11 @@ if __name__ == "__main__":
                         "model",
                         "layer",
                         "method",
+                        "n_components",
                         "baseline_acc",
                         "ablation_acc",
                         "effect",
-                        "mean_proj",
+                        "cumulative_variance",
                     ]
                 )
 
@@ -688,23 +994,26 @@ if __name__ == "__main__":
                             result["model"],
                             result["layer"],
                             "diff_means",
+                            1,  # Single direction
                             f"{dm['baseline_accuracy']:.4f}",
                             f"{dm['ablation_accuracy']:.4f}",
                             f"{dm['ablation_effect']:.4f}",
-                            f"{dm['mean_projection']:.4f}",
+                            "N/A",
                         ]
                     )
-                    # PCA-on-diff row
-                    pca = result["pca_on_diff"]
+                    # PCA-on-diff subspace row
+                    pca = result["pca_on_diff_subspace"]
+                    cumulative_var = pca["metadata"].get("cumulative_explained_variance", "N/A")
                     writer.writerow(
                         [
                             result["model"],
                             result["layer"],
-                            "pca_on_diff",
+                            "pca_on_diff_subspace",
+                            pca["n_components"],
                             f"{pca['baseline_accuracy']:.4f}",
                             f"{pca['ablation_accuracy']:.4f}",
                             f"{pca['ablation_effect']:.4f}",
-                            f"{pca['mean_projection']:.4f}",
+                            f"{cumulative_var:.4f}" if isinstance(cumulative_var, float) else cumulative_var,
                         ]
                     )
 
@@ -770,10 +1079,11 @@ if __name__ == "__main__":
                 "model",
                 "layer",
                 "method",
+                "n_components",
                 "baseline_acc",
                 "ablation_acc",
                 "effect",
-                "mean_proj",
+                "cumulative_variance",
             ]
         )
 
@@ -787,23 +1097,26 @@ if __name__ == "__main__":
                     model,
                     layer,
                     "diff_means",
+                    1,  # Single direction
                     f"{dm['baseline_accuracy']:.4f}",
                     f"{dm['ablation_accuracy']:.4f}",
                     f"{dm['ablation_effect']:.4f}",
-                    f"{dm['mean_projection']:.4f}",
+                    "N/A",
                 ]
             )
-            # PCA-on-diff row
-            pca = result["pca_on_diff"]
+            # PCA-on-diff subspace row
+            pca = result["pca_on_diff_subspace"]
+            cumulative_var = pca["metadata"].get("cumulative_explained_variance", "N/A")
             writer.writerow(
                 [
                     model,
                     layer,
-                    "pca_on_diff",
+                    "pca_on_diff_subspace",
+                    pca["n_components"],
                     f"{pca['baseline_accuracy']:.4f}",
                     f"{pca['ablation_accuracy']:.4f}",
                     f"{pca['ablation_effect']:.4f}",
-                    f"{pca['mean_projection']:.4f}",
+                    f"{cumulative_var:.4f}" if isinstance(cumulative_var, float) else cumulative_var,
                 ]
             )
 
