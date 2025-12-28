@@ -630,10 +630,14 @@ if __name__ == "__main__":
         # "EleutherAI/pythia-70m-deduped": 6,
         # "EleutherAI/pythia-1b-deduped": 16,
         # "EleutherAI/pythia-2.8b-deduped": 32,
-        "allenai/OLMo-1B-hf": 16,
-        "allenai/OLMo-7B-hf": 32,
-        "Qwen/Qwen2.5-1.5B": 28,
+        # "allenai/OLMo-1B-hf": 16,
+        # "allenai/OLMo-7B-hf": 32,
+        # "Qwen/Qwen2.5-1.5B": 28,
         "google/gemma-2-2b": 26,
+        "EleutherAI/pythia-6.9b-deduped": 32,
+        "meta-llama/Meta-Llama-3-8B": 32,
+        "google/gemma-2-9b": 42,
+        "mistralai/Mistral-7B-v0.3": 32,
     }
     blimp_subset = "anaphor_number_agreement"
     max_pairs = None
