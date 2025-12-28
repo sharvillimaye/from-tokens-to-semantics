@@ -383,222 +383,66 @@ def visualization(
     results_dir: Path,
     model_name: str,
 ):
-    """Create comprehensive visualizations for ablation results.
+    """Create visualization for ablation effect by layer.
 
     Args:
         results: List of result dictionaries, each containing:
             - layer: int
-            - diff_means: dict with baseline_accuracy, ablation_accuracy, ablation_effect, etc.
+            - diff_means: dict with ablation_effect
+            - pca_on_diff: dict with ablation_effect
         results_dir: Directory to save plots
         model_name: Name of the model (for plot titles and filenames)
     """
-    import matplotlib.patches as mpatches
     import matplotlib.pyplot as plt
 
-    # Extract data
+    # Extract data for both methods
     layers = [r["layer"] for r in results]
     dm = [r["diff_means"] for r in results]
+    pca = [r["pca_on_diff"] for r in results]
 
-    baseline_acc = [d["baseline_accuracy"] for d in dm]
-    ablation_acc = [d["ablation_accuracy"] for d in dm]
-    ablation_effect = [d["ablation_effect"] for d in dm]
-    mean_proj = [d["mean_projection"] for d in dm]
+    # Ablation effect data
+    dm_ablation_effect = [d["ablation_effect"] for d in dm]
+    pca_ablation_effect = [p["ablation_effect"] for p in pca]
 
     # Clean model name for filename
     clean_name = model_name.replace("/", "_").replace("-", "_")
 
-    # Create figure with subplots
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle(f"Ablation Analysis: {model_name}", fontsize=16, fontweight="bold")
-
-    # Plot 1: Ablation Effect by Layer (Main Result)
-    ax1 = axes[0, 0]
-    ax1.plot(
+    # Create single figure showing ablation effect by layer
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    ax.plot(
         layers,
-        ablation_effect,
+        dm_ablation_effect,
         marker="o",
         linewidth=2,
         markersize=8,
         color="#2E86AB",
-        label="Ablation Effect",
+        label="Diff-Means",
     )
-    ax1.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
-    ax1.fill_between(layers, ablation_effect, 0, alpha=0.3, color="#2E86AB")
-    ax1.set_xlabel("Layer", fontsize=12, fontweight="bold")
-    ax1.set_ylabel("Ablation Effect (Δ Accuracy)", fontsize=12, fontweight="bold")
-    ax1.set_title("Ablation Effect by Layer", fontsize=14, fontweight="bold")
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(fontsize=10)
-
-    # Highlight top 3 layers
-    top_3_indices = sorted(
-        range(len(ablation_effect)), key=lambda i: abs(ablation_effect[i]), reverse=True
-    )[:3]
-    for idx in top_3_indices:
-        ax1.plot(
-            layers[idx], ablation_effect[idx], marker="*", markersize=15, color="red", zorder=5
-        )
-
-    # Plot 2: Accuracy Comparison (Baseline vs Ablated)
-    ax2 = axes[0, 1]
-    width = 0.35
-    x = range(len(layers))
-    ax2.bar(
-        [i - width / 2 for i in x],
-        baseline_acc,
-        width,
-        label="Baseline",
-        color="#06A77D",
-        alpha=0.8,
-    )
-    ax2.bar(
-        [i + width / 2 for i in x],
-        ablation_acc,
-        width,
-        label="Ablated",
-        color="#D81E5B",
-        alpha=0.8,
-    )
-    ax2.set_xlabel("Layer", fontsize=12, fontweight="bold")
-    ax2.set_ylabel("Accuracy", fontsize=12, fontweight="bold")
-    ax2.set_title("Accuracy Comparison by Layer", fontsize=14, fontweight="bold")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(layers)
-    ax2.legend(fontsize=10)
-    ax2.grid(True, alpha=0.3, axis="y")
-
-    # Plot 3: Mean Projection Values
-    ax3 = axes[1, 0]
-    colors = ["#FF6B6B" if abs(e) > 0.05 else "#95E1D3" for e in ablation_effect]
-    ax3.bar(layers, mean_proj, color=colors, alpha=0.7, edgecolor="black")
-    ax3.set_xlabel("Layer", fontsize=12, fontweight="bold")
-    ax3.set_ylabel("Mean Projection", fontsize=12, fontweight="bold")
-    ax3.set_title("Mean Projection Values (Calibration)", fontsize=14, fontweight="bold")
-    ax3.grid(True, alpha=0.3, axis="y")
-
-    # Add legend for colors
-    high_patch = mpatches.Patch(color="#FF6B6B", alpha=0.7, label="High Effect (|Δ| > 0.05)")
-    low_patch = mpatches.Patch(color="#95E1D3", alpha=0.7, label="Low Effect (|Δ| ≤ 0.05)")
-    ax3.legend(handles=[high_patch, low_patch], fontsize=10)
-
-    # Plot 4: Effect Size Heatmap-style visualization
-    ax4 = axes[1, 1]
-
-    # Normalize effects for color mapping
-    max_abs_effect = max(abs(e) for e in ablation_effect) if ablation_effect else 1
-    normalized_effects = [e / max_abs_effect if max_abs_effect > 0 else 0 for e in ablation_effect]
-
-    # Create color-coded bars
-    colors_gradient = plt.cm.RdYlGn_r([0.5 + 0.5 * ne for ne in normalized_effects])
-    bars = ax4.barh(
+    ax.plot(
         layers,
-        [abs(e) for e in ablation_effect],
-        color=colors_gradient,
-        edgecolor="black",
-        alpha=0.8,
+        pca_ablation_effect,
+        marker="s",
+        linewidth=2,
+        markersize=8,
+        color="#E94F37",
+        label="PCA-on-Diff",
     )
-    ax4.set_ylabel("Layer", fontsize=12, fontweight="bold")
-    ax4.set_xlabel("|Ablation Effect|", fontsize=12, fontweight="bold")
-    ax4.set_title("Effect Magnitude by Layer (Sorted by Layer)", fontsize=14, fontweight="bold")
-    ax4.invert_yaxis()
-    ax4.grid(True, alpha=0.3, axis="x")
-
-    # Add value labels on bars
-    for i, (layer, effect) in enumerate(zip(layers, ablation_effect)):
-        ax4.text(
-            abs(effect) + max_abs_effect * 0.01, layer, f"{effect:+.3f}", va="center", fontsize=9
-        )
+    ax.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
+    ax.fill_between(layers, dm_ablation_effect, 0, alpha=0.2, color="#2E86AB")
+    ax.fill_between(layers, pca_ablation_effect, 0, alpha=0.2, color="#E94F37")
+    ax.set_xlabel("Layer", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Ablation Effect (Δ Accuracy)", fontsize=12, fontweight="bold")
+    ax.set_title(f"Ablation Effect by Layer: {model_name}", fontsize=14, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10)
 
     plt.tight_layout()
 
     # Save plot
-    plot_path = results_dir / f"ablation_analysis_{clean_name}.pdf"
+    plot_path = results_dir / f"ablation_effect_{clean_name}.pdf"
     plt.savefig(plot_path, bbox_inches="tight")
     print(f"Saved visualization to {plot_path}")
-    plt.close()
-
-    # Create a second figure: Line plot with confidence-style bands
-    fig2, ax = plt.subplots(figsize=(14, 6))
-
-    ax.plot(
-        layers,
-        baseline_acc,
-        marker="o",
-        linewidth=2.5,
-        markersize=8,
-        color="#06A77D",
-        label="Baseline (No Ablation)",
-        zorder=3,
-    )
-    ax.plot(
-        layers,
-        ablation_acc,
-        marker="s",
-        linewidth=2.5,
-        markersize=8,
-        color="#D81E5B",
-        label="Ablated (Diff-Means Direction)",
-        zorder=3,
-    )
-
-    ax.set_xlabel("Layer", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Accuracy", fontsize=14, fontweight="bold")
-    ax.set_title(f"Layer-wise Accuracy: {model_name}", fontsize=16, fontweight="bold")
-    ax.legend(fontsize=12, loc="best")
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(
-        [
-            min(min(baseline_acc), min(ablation_acc)) - 0.05,
-            max(max(baseline_acc), max(ablation_acc)) + 0.05,
-        ]
-    )
-
-    plt.tight_layout()
-    plot_path2 = results_dir / f"accuracy_by_layer_{clean_name}.pdf"
-    plt.savefig(plot_path2, bbox_inches="tight")
-    print(f"Saved accuracy plot to {plot_path2}")
-    plt.close()
-
-    # Create a third figure: Statistical summary
-    fig3, ax = plt.subplots(figsize=(10, 6))
-
-    # Sort by effect size
-    sorted_indices = sorted(
-        range(len(ablation_effect)), key=lambda i: ablation_effect[i], reverse=True
-    )
-    sorted_layers = [layers[i] for i in sorted_indices]
-    sorted_effects = [ablation_effect[i] for i in sorted_indices]
-
-    colors_sorted = ["#D81E5B" if e > 0 else "#2E86AB" for e in sorted_effects]
-    _ = ax.barh(
-        range(len(sorted_layers)),
-        sorted_effects,
-        color=colors_sorted,
-        alpha=0.8,
-        edgecolor="black",
-    )
-    ax.set_yticks(range(len(sorted_layers)))
-    ax.set_yticklabels([f"Layer {l}" for l in sorted_layers])
-    ax.set_xlabel("Ablation Effect (Δ Accuracy)", fontsize=12, fontweight="bold")
-    ax.set_title(f"Ablation Effect Ranked by Impact: {model_name}", fontsize=14, fontweight="bold")
-    ax.axvline(x=0, color="black", linewidth=1)
-    ax.grid(True, alpha=0.3, axis="x")
-
-    # Add value labels
-    for i, effect in enumerate(sorted_effects):
-        ax.text(
-            effect + (0.003 if effect > 0 else -0.003),
-            i,
-            f"{effect:+.3f}",
-            va="center",
-            ha="left" if effect > 0 else "right",
-            fontsize=9,
-        )
-
-    plt.tight_layout()
-    plot_path3 = results_dir / f"effect_ranked_{clean_name}.pdf"
-    plt.savefig(plot_path3, bbox_inches="tight")
-    print(f"Saved ranked effect plot to {plot_path3}")
     plt.close()
 
 
@@ -627,14 +471,13 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(SEED)
 
     model_layers: dict[str, int] = {
-        # "EleutherAI/pythia-70m-deduped": 6,
-        # "EleutherAI/pythia-1b-deduped": 16,
-        # "EleutherAI/pythia-2.8b-deduped": 32,
-        # "allenai/OLMo-1B-hf": 16,
-        # "allenai/OLMo-7B-hf": 32,
-        # "Qwen/Qwen2.5-1.5B": 28,
-        # "google/gemma-2-2b": 26,
-        # "EleutherAI/pythia-6.9b-deduped": 32,
+        "EleutherAI/pythia-70m-deduped": 6,
+        "EleutherAI/pythia-1b-deduped": 16,
+        "EleutherAI/pythia-2.8b-deduped": 32,
+        "EleutherAI/pythia-6.9b-deduped": 32,
+        "allenai/OLMo-1B-hf": 16,
+        "allenai/OLMo-7B-hf": 32,
+        "google/gemma-2-2b": 26,
         "meta-llama/Meta-Llama-3-8B": 32,
         "google/gemma-2-9b": 42,
         "mistralai/Mistral-7B-v0.3": 32,
@@ -649,15 +492,15 @@ if __name__ == "__main__":
     # - discovery_pairs: used to find the ablation direction (diff of means)
     # - calibration_pairs: used to compute mean projection for ablation
     # - eval_pairs: used to evaluate the effect of ablation
-    if len(pairs) < 200:
+    if len(pairs) < 700:
         raise ValueError(
-            f"Insufficient pairs in BLiMP subset '{blimp_subset}': {len(pairs)} < 200. "
-            "Need at least 100 for discovery, 50 for calibration, and 50 for evaluation."
+            f"Insufficient pairs in BLiMP subset '{blimp_subset}': {len(pairs)} < 700. "
+            "Need at least 100 for discovery, 50 for calibration, and 550 for evaluation."
         )
 
     discovery_pairs = pairs[:100]
     calibration_pairs = pairs[100:150]
-    eval_pairs = pairs[150:450]  # 300 samples - good balance of speed vs precision
+    eval_pairs = pairs[150:700]  # 550 samples - can detect ~3.5% effects reliably
 
     print(
         f"Data split: {len(discovery_pairs)} discovery, {len(calibration_pairs)} calibration, {len(eval_pairs)} eval"
@@ -676,14 +519,33 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
 
     import gc
+    import os
     import shutil
+
+    # Set HF cache to local directory to avoid polluting shared cluster storage
+    # and ensure we can actually clear it
+    HF_CACHE_DIR = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
+    os.environ["HF_HOME"] = str(HF_CACHE_DIR.parent)
+    os.environ["TRANSFORMERS_CACHE"] = str(HF_CACHE_DIR)
 
     def clear_model_cache():
         """Clear HuggingFace cache to free disk space."""
         cache_dirs = [
+            HF_CACHE_DIR,
             Path.home() / ".cache/huggingface/hub",
             Path("/workspace/.cache/huggingface/hub"),
         ]
+        # Also check environment variables
+        for env_var in ["HF_HOME", "TRANSFORMERS_CACHE", "HUGGINGFACE_HUB_CACHE"]:
+            if env_var in os.environ:
+                env_path = Path(os.environ[env_var])
+                if env_path.name != "hub":
+                    env_path = env_path / "hub"
+                cache_dirs.append(env_path)
+
+        # Deduplicate paths
+        cache_dirs = list(set(cache_dirs))
+
         for cache_dir in cache_dirs:
             if cache_dir.exists():
                 for item in cache_dir.glob("models--*"):
@@ -693,153 +555,210 @@ if __name__ == "__main__":
                     except Exception as e:
                         print(f"Failed to clear {item}: {e}")
 
+    failed_models = []
+
     for model_name, num_layers in model_layers.items():
         print(f"\n\n{'#' * 100}")
         print(f"RUNNING EXPERIMENT FOR MODEL: {model_name} with {num_layers} layers")
         print(f"{'#' * 100}\n")
 
-        # Create ablator once (we'll reuse it across layers)
-        config = AblationConfig(
-            model_name=model_name,
-            layer_idx=0,
-            target_component="residual",
-            calibration_batch_size=4,
-        )
-
-        ablator = MeanSubspaceAblation(config)
-        ablator.load_model()
-
-        # Run experiment for each layer
-        for layer in range(num_layers):
-            print(f"\n{'=' * 80}")
-            print(f"LAYER {layer} / {num_layers - 1}")
-            print(f"{'=' * 80}")
-
-            # Extract activations for this layer
-            print(f"\nExtracting activations at layer {layer}...")
-            pos_acts, neg_acts = ablator.extract_paired_activations(
-                positive_texts, negative_texts, layer_idx=layer
+        try:
+            # Create ablator once (we'll reuse it across layers)
+            config = AblationConfig(
+                model_name=model_name,
+                layer_idx=0,
+                target_component="residual",
+                calibration_batch_size=4,
             )
 
-            print("\n--- Diff-Means Direction ---")
-            diff_direction = DirectionDiscovery.from_diff_means(
-                pos_acts, neg_acts, layer, name=f"layer{layer}_diffmeans"
-            )
+            ablator = MeanSubspaceAblation(config)
+            ablator.load_model()
+        except Exception as e:
+            print(f"❌ FAILED to load model {model_name}: {e}")
+            print("Skipping to next model...")
+            failed_models.append({"model": model_name, "error": str(e), "stage": "loading"})
+            clear_model_cache()
+            continue
 
-            diff_results = ablator.run_ablation_experiment(
-                diff_direction.to(config.device),
-                calibration_texts,
-                eval_pairs,
-            )
+        try:
+            # Run experiment for each layer
+            for layer in range(num_layers):
+                print(f"\n{'=' * 80}")
+                print(f"LAYER {layer} / {num_layers - 1}")
+                print(f"{'=' * 80}")
 
-            # Store compact results
-            all_results.append(
-                {
-                    "model": model_name,
-                    "layer": layer,
-                    "diff_means": {
-                        "direction_name": diff_results["direction_name"],
-                        "discovery_method": diff_results["discovery_method"],
-                        "baseline_accuracy": diff_results["baseline"]["accuracy"],
-                        "ablation_accuracy": diff_results["ablation"]["accuracy"],
-                        "ablation_effect": diff_results["ablation_effect"],
-                        "mean_projection": diff_results["mean_projection"],
-                        "metadata": diff_results["direction_metadata"],
-                    },
-                }
-            )
+                # Extract activations for this layer
+                print(f"\nExtracting activations at layer {layer}...")
+                pos_acts, neg_acts = ablator.extract_paired_activations(
+                    positive_texts, negative_texts, layer_idx=layer
+                )
 
-            # Print layer summary
-            print(f"\n{'=' * 80}")
-            print(f"LAYER {layer} SUMMARY:")
-            print(f"  Diff-Means: {diff_results['ablation_effect']:+.2%} effect")
-            print(f"{'=' * 80}")
+                print("\n--- Diff-Means Direction ---")
+                diff_direction = DirectionDiscovery.from_diff_means(
+                    pos_acts, neg_acts, layer, name=f"layer{layer}_diffmeans"
+                )
 
-            # Clean up GPU memory after each layer
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                diff_results = ablator.run_ablation_experiment(
+                    diff_direction.to(config.device),
+                    calibration_texts,
+                    eval_pairs,
+                )
 
-        # Save results and visualizations for this model
-        print(f"\n{'#' * 100}")
-        print(f"SAVING RESULTS FOR MODEL: {model_name}")
-        print(f"{'#' * 100}\n")
+                print("\n--- PCA on Differences Direction ---")
+                pca_diff_direction = DirectionDiscovery.from_pca_on_diff(
+                    pos_acts, neg_acts, layer, component=0, name=f"layer{layer}_pca_diff"
+                )
 
-        # Filter results for current model
-        model_results = [r for r in all_results if r["model"] == model_name]
+                pca_diff_results = ablator.run_ablation_experiment(
+                    pca_diff_direction.to(config.device),
+                    calibration_texts,
+                    eval_pairs,
+                )
 
-        # Generate timestamp for this model
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        clean_model_name = model_name.replace("/", "_").replace("-", "_")
+                # Store compact results
+                all_results.append(
+                    {
+                        "model": model_name,
+                        "layer": layer,
+                        "diff_means": {
+                            "direction_name": diff_results["direction_name"],
+                            "discovery_method": diff_results["discovery_method"],
+                            "baseline_accuracy": diff_results["baseline"]["accuracy"],
+                            "ablation_accuracy": diff_results["ablation"]["accuracy"],
+                            "ablation_effect": diff_results["ablation_effect"],
+                            "mean_projection": diff_results["mean_projection"],
+                            "metadata": diff_results["direction_metadata"],
+                        },
+                        "pca_on_diff": {
+                            "direction_name": pca_diff_results["direction_name"],
+                            "discovery_method": pca_diff_results["discovery_method"],
+                            "baseline_accuracy": pca_diff_results["baseline"]["accuracy"],
+                            "ablation_accuracy": pca_diff_results["ablation"]["accuracy"],
+                            "ablation_effect": pca_diff_results["ablation_effect"],
+                            "mean_projection": pca_diff_results["mean_projection"],
+                            "metadata": pca_diff_results["direction_metadata"],
+                        },
+                    }
+                )
 
-        # Save CSV for this model
-        model_csv_path = output_dir / f"summary_{clean_model_name}_{blimp_subset}_{timestamp}.csv"
-        with open(model_csv_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                [
-                    "model",
-                    "layer",
-                    "method",
-                    "baseline_acc",
-                    "ablation_acc",
-                    "effect",
-                    "mean_proj",
-                ]
-            )
+                # Print layer summary
+                print(f"\n{'=' * 80}")
+                print(f"LAYER {layer} SUMMARY:")
+                print(f"  Diff-Means: {diff_results['ablation_effect']:+.2%} effect")
+                print(f"  PCA-on-Diff: {pca_diff_results['ablation_effect']:+.2%} effect")
+                print(f"{'=' * 80}")
 
-            for result in model_results:
-                dm = result["diff_means"]
+                # Clean up GPU memory after each layer
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            # Save results and visualizations for this model
+            print(f"\n{'#' * 100}")
+            print(f"SAVING RESULTS FOR MODEL: {model_name}")
+            print(f"{'#' * 100}\n")
+
+            # Filter results for current model
+            model_results = [r for r in all_results if r["model"] == model_name]
+
+            # Generate timestamp for this model
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            clean_model_name = model_name.replace("/", "_").replace("-", "_")
+
+            # Save CSV for this model
+            model_csv_path = output_dir / f"summary_{clean_model_name}_{blimp_subset}_{timestamp}.csv"
+            with open(model_csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
                 writer.writerow(
                     [
-                        result["model"],
-                        result["layer"],
-                        "diff_means",
-                        f"{dm['baseline_accuracy']:.4f}",
-                        f"{dm['ablation_accuracy']:.4f}",
-                        f"{dm['ablation_effect']:.4f}",
-                        f"{dm['mean_projection']:.4f}",
+                        "model",
+                        "layer",
+                        "method",
+                        "baseline_acc",
+                        "ablation_acc",
+                        "effect",
+                        "mean_proj",
                     ]
                 )
 
-        print(f"Saved model CSV to {model_csv_path}")
+                for result in model_results:
+                    # Diff-means row
+                    dm = result["diff_means"]
+                    writer.writerow(
+                        [
+                            result["model"],
+                            result["layer"],
+                            "diff_means",
+                            f"{dm['baseline_accuracy']:.4f}",
+                            f"{dm['ablation_accuracy']:.4f}",
+                            f"{dm['ablation_effect']:.4f}",
+                            f"{dm['mean_projection']:.4f}",
+                        ]
+                    )
+                    # PCA-on-diff row
+                    pca = result["pca_on_diff"]
+                    writer.writerow(
+                        [
+                            result["model"],
+                            result["layer"],
+                            "pca_on_diff",
+                            f"{pca['baseline_accuracy']:.4f}",
+                            f"{pca['ablation_accuracy']:.4f}",
+                            f"{pca['ablation_effect']:.4f}",
+                            f"{pca['mean_projection']:.4f}",
+                        ]
+                    )
 
-        # Save JSON for this model
-        model_json_path = (
-            output_dir / f"results_{clean_model_name}_{blimp_subset}_{timestamp}.json"
-        )
-        with open(model_json_path, "w") as f:
-            json.dump(
-                {
-                    "experiment_info": {
-                        "model": model_name,
-                        "num_layers": num_layers,
-                        "blimp_subset": blimp_subset,
-                        "discovery_pairs": len(discovery_pairs),
-                        "eval_pairs": len(eval_pairs),
-                        "calibration_samples": len(calibration_texts),
-                        "timestamp": timestamp,
-                    },
-                    "results": model_results,
-                },
-                f,
-                indent=2,
+            print(f"Saved model CSV to {model_csv_path}")
+
+            # Save JSON for this model
+            model_json_path = (
+                output_dir / f"results_{clean_model_name}_{blimp_subset}_{timestamp}.json"
             )
+            with open(model_json_path, "w") as f:
+                json.dump(
+                    {
+                        "experiment_info": {
+                            "model": model_name,
+                            "num_layers": num_layers,
+                            "blimp_subset": blimp_subset,
+                            "discovery_pairs": len(discovery_pairs),
+                            "eval_pairs": len(eval_pairs),
+                            "calibration_samples": len(calibration_texts),
+                            "timestamp": timestamp,
+                        },
+                        "results": model_results,
+                    },
+                    f,
+                    indent=2,
+                )
 
-        print(f"Saved model JSON to {model_json_path}")
+            print(f"Saved model JSON to {model_json_path}")
 
-        # Generate visualizations for this model
-        print(f"Generating visualizations for {model_name}...")
-        visualization(model_results, output_dir, model_name)
+            # Generate visualizations for this model
+            print(f"Generating visualizations for {model_name}...")
+            visualization(model_results, output_dir, model_name)
 
-        # Clean up model from memory and disk after processing all layers
-        print(f"\nCleaning up {model_name}...")
-        del ablator.model
-        del ablator
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        clear_model_cache()
-        print(f"Cleanup complete for {model_name}\n")
+            # Cleanup model after successful experiment to free GPU memory
+            del ablator.model
+            del ablator
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        except Exception as e:
+            print(f"❌ FAILED during experiment for {model_name}: {e}")
+            print("Saving partial results and continuing to next model...")
+            failed_models.append({"model": model_name, "error": str(e), "stage": "experiment"})
+            # Still try to clean up
+            try:
+                del ablator.model
+                del ablator
+            except Exception:
+                pass
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            clear_model_cache()
 
     # Save summary CSV for easy analysis after all models are done
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -874,6 +793,19 @@ if __name__ == "__main__":
                     f"{dm['mean_projection']:.4f}",
                 ]
             )
+            # PCA-on-diff row
+            pca = result["pca_on_diff"]
+            writer.writerow(
+                [
+                    model,
+                    layer,
+                    "pca_on_diff",
+                    f"{pca['baseline_accuracy']:.4f}",
+                    f"{pca['ablation_accuracy']:.4f}",
+                    f"{pca['ablation_effect']:.4f}",
+                    f"{pca['mean_projection']:.4f}",
+                ]
+            )
 
     print(f"\nAll models summary CSV saved to {summary_path}")
 
@@ -891,7 +823,19 @@ if __name__ == "__main__":
                     "timestamp": timestamp,
                 },
                 "results": all_results,
+                "failed_models": failed_models,
             },
             f,
             indent=2,
         )
+
+    # Print final summary
+    print(f"\n{'=' * 80}")
+    print("EXPERIMENT COMPLETE")
+    print(f"{'=' * 80}")
+    print(f"Results saved to: {output_dir}")
+    print(f"Models processed successfully: {len(model_layers) - len(failed_models)}/{len(model_layers)}")
+    if failed_models:
+        print(f"\nFailed models ({len(failed_models)}):")
+        for fm in failed_models:
+            print(f"  - {fm['model']}: {fm['error'][:100]}...")
