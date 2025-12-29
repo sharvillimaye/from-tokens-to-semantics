@@ -602,8 +602,16 @@ class MeanSubspaceAblation:
         direction: SubspaceDirection,
         calibration_texts: List[str],
         eval_pairs: List[Tuple[str, str]],
+        baseline: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Run complete ablation experiment with baseline."""
+        """Run complete ablation experiment with baseline.
+        
+        Args:
+            direction: The direction to ablate
+            calibration_texts: Texts for computing mean projection
+            eval_pairs: List of (good_sentence, bad_sentence) for evaluation
+            baseline: Optional pre-computed baseline results to avoid redundant computation
+        """
         results = {
             "direction_name": direction.name,
             "layer_idx": direction.layer_idx,
@@ -611,11 +619,12 @@ class MeanSubspaceAblation:
             "direction_metadata": direction.metadata,
         }
 
-        # Baseline
-        print("\n=== Baseline (No Ablation) ===")
-        baseline = self.evaluate_minimal_pairs(eval_pairs, desc="Baseline")
+        # Baseline - use provided or compute
+        if baseline is None:
+            print("\n=== Baseline (No Ablation) ===")
+            baseline = self.evaluate_minimal_pairs(eval_pairs, desc="Baseline")
+            print(f"Baseline accuracy: {baseline['accuracy']:.2%}")
         results["baseline"] = baseline
-        print(f"Baseline accuracy: {baseline['accuracy']:.2%}")
 
         # Calibrate and ablate
         print("\n=== Calibrating Direction ===")
@@ -636,6 +645,7 @@ class MeanSubspaceAblation:
         subspace: SubspaceDirections,
         calibration_texts: List[str],
         eval_pairs: List[Tuple[str, str]],
+        baseline: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run complete multi-direction subspace ablation experiment with baseline.
 
@@ -643,6 +653,7 @@ class MeanSubspaceAblation:
             subspace: SubspaceDirections containing k orthonormal directions
             calibration_texts: Texts for computing mean projections
             eval_pairs: List of (good_sentence, bad_sentence) for evaluation
+            baseline: Optional pre-computed baseline results to avoid redundant computation
 
         Returns:
             Dictionary with baseline, ablation results, and effect metrics
@@ -655,11 +666,12 @@ class MeanSubspaceAblation:
             "subspace_metadata": subspace.metadata,
         }
 
-        # Baseline (no ablation)
-        print("\n=== Baseline (No Ablation) ===")
-        baseline = self.evaluate_minimal_pairs_subspace(eval_pairs, desc="Baseline")
+        # Baseline - use provided or compute
+        if baseline is None:
+            print("\n=== Baseline (No Ablation) ===")
+            baseline = self.evaluate_minimal_pairs_subspace(eval_pairs, desc="Baseline")
+            print(f"Baseline accuracy: {baseline['accuracy']:.2%}")
         results["baseline"] = baseline
-        print(f"Baseline accuracy: {baseline['accuracy']:.2%}")
 
         # Calibrate subspace
         print(f"\n=== Calibrating Subspace ({subspace.n_components} components) ===")
@@ -825,12 +837,29 @@ if __name__ == "__main__":
     import gc
     import os
     import shutil
+    import time
 
     # Set HF cache to local directory to avoid polluting shared cluster storage
     # and ensure we can actually clear it
     HF_CACHE_DIR = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
     os.environ["HF_HOME"] = str(HF_CACHE_DIR.parent)
     os.environ["TRANSFORMERS_CACHE"] = str(HF_CACHE_DIR)
+
+    def aggressive_cuda_cleanup():
+        """Aggressively clean up CUDA resources to prevent device busy errors."""
+        if torch.cuda.is_available():
+            # Synchronize all CUDA streams
+            torch.cuda.synchronize()
+            # Empty the cache
+            torch.cuda.empty_cache()
+            # Reset peak memory stats
+            torch.cuda.reset_peak_memory_stats()
+            # Force garbage collection
+            gc.collect()
+            # Empty cache again after gc
+            torch.cuda.empty_cache()
+            # Small delay to allow GPU to fully release resources
+            time.sleep(2)
 
     def clear_model_cache():
         """Clear HuggingFace cache to free disk space."""
@@ -861,28 +890,43 @@ if __name__ == "__main__":
 
     failed_models = []
 
+    MAX_LOAD_RETRIES = 3
+
     for model_name, num_layers in model_layers.items():
         print(f"\n\n{'#' * 100}")
         print(f"RUNNING EXPERIMENT FOR MODEL: {model_name} with {num_layers} layers")
         print(f"{'#' * 100}\n")
 
-        try:
-            # Create ablator once (we'll reuse it across layers)
-            config = AblationConfig(
-                model_name=model_name,
-                layer_idx=0,
-                target_component="residual",
-                calibration_batch_size=4,
-            )
+        ablator = None
+        for attempt in range(MAX_LOAD_RETRIES):
+            try:
+                # Create ablator once (we'll reuse it across layers)
+                config = AblationConfig(
+                    model_name=model_name,
+                    layer_idx=0,
+                    target_component="residual",
+                    calibration_batch_size=4,
+                )
 
-            ablator = MeanSubspaceAblation(config)
-            ablator.load_model()
-        except Exception as e:
-            print(f"❌ FAILED to load model {model_name}: {e}")
-            print("Skipping to next model...")
-            failed_models.append({"model": model_name, "error": str(e), "stage": "loading"})
-            clear_model_cache()
-            continue
+                ablator = MeanSubspaceAblation(config)
+                ablator.load_model()
+                break  # Success, exit retry loop
+            except Exception as e:
+                print(f"❌ FAILED to load model {model_name} (attempt {attempt + 1}/{MAX_LOAD_RETRIES}): {e}")
+                gc.collect()
+                aggressive_cuda_cleanup()
+                
+                if attempt < MAX_LOAD_RETRIES - 1:
+                    wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s, 15s
+                    print(f"Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                else:
+                    print("Max retries reached. Skipping to next model...")
+                    failed_models.append({"model": model_name, "error": str(e), "stage": "loading"})
+                    clear_model_cache()
+
+        if ablator is None or ablator.model is None:
+            continue  # Skip to next model
 
         try:
             # Run experiment for each layer
@@ -897,6 +941,11 @@ if __name__ == "__main__":
                     positive_texts, negative_texts, layer_idx=layer
                 )
 
+                # Compute baseline once (no ablation) - shared across all methods
+                print("\n=== Baseline (No Ablation) ===")
+                baseline = ablator.evaluate_minimal_pairs(eval_pairs, desc="Baseline")
+                print(f"Baseline accuracy: {baseline['accuracy']:.2%}")
+
                 print("\n--- Diff-Means Direction ---")
                 diff_direction = DirectionDiscovery.from_diff_means(
                     pos_acts, neg_acts, layer, name=f"layer{layer}_diffmeans"
@@ -906,6 +955,7 @@ if __name__ == "__main__":
                     diff_direction.to(config.device),
                     calibration_texts,
                     eval_pairs,
+                    baseline=baseline,
                 )
 
                 print("\n--- PCA on Differences Subspace (Multi-Direction) ---")
@@ -917,6 +967,7 @@ if __name__ == "__main__":
                     pca_diff_subspace.to(config.device),
                     calibration_texts,
                     eval_pairs,
+                    baseline=baseline,
                 )
 
                 # Store compact results
@@ -1051,8 +1102,8 @@ if __name__ == "__main__":
             del ablator.model
             del ablator
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            aggressive_cuda_cleanup()
+            clear_model_cache()
 
         except Exception as e:
             print(f"❌ FAILED during experiment for {model_name}: {e}")
@@ -1065,8 +1116,7 @@ if __name__ == "__main__":
             except Exception:
                 pass
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            aggressive_cuda_cleanup()
             clear_model_cache()
 
     # Save summary CSV for easy analysis after all models are done
