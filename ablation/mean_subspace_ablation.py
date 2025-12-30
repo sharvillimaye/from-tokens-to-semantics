@@ -233,7 +233,9 @@ class DirectionDiscovery:
         n_components = min(n_components, max_components)
 
         if n_components < requested_n_components and variance_threshold is None:
-            print(f"Warning: Requested {requested_n_components} components but only {max_components} available. Using {n_components}.")
+            print(
+                f"Warning: Requested {requested_n_components} components but only {max_components} available. Using {n_components}."
+            )
 
         # Extract top-k components: pca.components_ has shape [n_components, hidden_dim]
         # We want [hidden_dim, k] for our convention
@@ -402,13 +404,17 @@ class MeanSubspaceAblation:
         if self.model is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
-        print(f"Calibrating subspace ({subspace.n_components} components) on {len(calibration_texts)} samples...")
+        print(
+            f"Calibrating subspace ({subspace.n_components} components) on {len(calibration_texts)} samples..."
+        )
         # subspace.vectors has shape [hidden_dim, k]
         direction_matrix = subspace.vectors.to(self.device)
         all_projections = []
         batch_size = self.config.calibration_batch_size
 
-        for batch_start in tqdm(range(0, len(calibration_texts), batch_size), desc="Calibrating subspace"):
+        for batch_start in tqdm(
+            range(0, len(calibration_texts), batch_size), desc="Calibrating subspace"
+        ):
             batch_texts = calibration_texts[batch_start : batch_start + batch_size]
             with torch.no_grad():
                 with self.model.trace(batch_texts):
@@ -605,7 +611,7 @@ class MeanSubspaceAblation:
         baseline: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run complete ablation experiment with baseline.
-        
+
         Args:
             direction: The direction to ablate
             calibration_texts: Texts for computing mean projection
@@ -787,14 +793,14 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(SEED)
 
     model_layers: dict[str, int] = {
-        "EleutherAI/pythia-70m-deduped": 6,
-        "EleutherAI/pythia-1b-deduped": 16,
-        "EleutherAI/pythia-2.8b-deduped": 32,
-        "EleutherAI/pythia-6.9b-deduped": 32,
-        "allenai/OLMo-1B-hf": 16,
-        "allenai/OLMo-7B-hf": 32,
-        "google/gemma-2-2b": 26,
-        "meta-llama/Meta-Llama-3-8B": 32,
+        # "EleutherAI/pythia-70m-deduped": 6,
+        # "EleutherAI/pythia-1b-deduped": 16,
+        # "EleutherAI/pythia-2.8b-deduped": 32,
+        # "EleutherAI/pythia-6.9b-deduped": 32,
+        # "allenai/OLMo-1B-hf": 16,
+        # "allenai/OLMo-7B-hf": 32,
+        # "google/gemma-2-2b": 26,
+        # "meta-llama/Meta-Llama-3-8B": 32,
         "google/gemma-2-9b": 42,
         "mistralai/Mistral-7B-v0.3": 32,
     }
@@ -912,17 +918,21 @@ if __name__ == "__main__":
                 ablator.load_model()
                 break  # Success, exit retry loop
             except Exception as e:
-                print(f"❌ FAILED to load model {model_name} (attempt {attempt + 1}/{MAX_LOAD_RETRIES}): {e}")
+                print(
+                    f"❌ FAILED to load model {model_name} (attempt {attempt + 1}/{MAX_LOAD_RETRIES}): {e}"
+                )
                 gc.collect()
                 aggressive_cuda_cleanup()
-                
+
                 if attempt < MAX_LOAD_RETRIES - 1:
                     wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s, 15s
                     print(f"Waiting {wait_time}s before retry...")
                     time.sleep(wait_time)
                 else:
                     print("Max retries reached. Skipping to next model...")
-                    failed_models.append({"model": model_name, "error": str(e), "stage": "loading"})
+                    failed_models.append(
+                        {"model": model_name, "error": str(e), "stage": "loading"}
+                    )
                     clear_model_cache()
 
         if ablator is None or ablator.model is None:
@@ -960,7 +970,11 @@ if __name__ == "__main__":
 
                 print("\n--- PCA on Differences Subspace (Multi-Direction) ---")
                 pca_diff_subspace = DirectionDiscovery.from_pca_on_diff_subspace(
-                    pos_acts, neg_acts, layer, n_components=5, name=f"layer{layer}_pca_diff_subspace"
+                    pos_acts,
+                    neg_acts,
+                    layer,
+                    n_components=5,
+                    name=f"layer{layer}_pca_diff_subspace",
                 )
 
                 pca_subspace_results = ablator.run_ablation_experiment_subspace(
@@ -1001,7 +1015,9 @@ if __name__ == "__main__":
                 print(f"\n{'=' * 80}")
                 print(f"LAYER {layer} SUMMARY:")
                 print(f"  Diff-Means (1D): {diff_results['ablation_effect']:+.2%} effect")
-                print(f"  PCA-on-Diff Subspace (k={pca_subspace_results['n_components']}): {pca_subspace_results['ablation_effect']:+.2%} effect")
+                print(
+                    f"  PCA-on-Diff Subspace (k={pca_subspace_results['n_components']}): {pca_subspace_results['ablation_effect']:+.2%} effect"
+                )
                 print(f"{'=' * 80}")
 
                 # Clean up GPU memory after each layer
@@ -1021,7 +1037,9 @@ if __name__ == "__main__":
             clean_model_name = model_name.replace("/", "_").replace("-", "_")
 
             # Save CSV for this model
-            model_csv_path = output_dir / f"summary_{clean_model_name}_{blimp_subset}_{timestamp}.csv"
+            model_csv_path = (
+                output_dir / f"summary_{clean_model_name}_{blimp_subset}_{timestamp}.csv"
+            )
             with open(model_csv_path, "w", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(
@@ -1064,7 +1082,9 @@ if __name__ == "__main__":
                             f"{pca['baseline_accuracy']:.4f}",
                             f"{pca['ablation_accuracy']:.4f}",
                             f"{pca['ablation_effect']:.4f}",
-                            f"{cumulative_var:.4f}" if isinstance(cumulative_var, float) else cumulative_var,
+                            f"{cumulative_var:.4f}"
+                            if isinstance(cumulative_var, float)
+                            else cumulative_var,
                         ]
                     )
 
@@ -1166,7 +1186,9 @@ if __name__ == "__main__":
                     f"{pca['baseline_accuracy']:.4f}",
                     f"{pca['ablation_accuracy']:.4f}",
                     f"{pca['ablation_effect']:.4f}",
-                    f"{cumulative_var:.4f}" if isinstance(cumulative_var, float) else cumulative_var,
+                    f"{cumulative_var:.4f}"
+                    if isinstance(cumulative_var, float)
+                    else cumulative_var,
                 ]
             )
 
@@ -1197,7 +1219,9 @@ if __name__ == "__main__":
     print("EXPERIMENT COMPLETE")
     print(f"{'=' * 80}")
     print(f"Results saved to: {output_dir}")
-    print(f"Models processed successfully: {len(model_layers) - len(failed_models)}/{len(model_layers)}")
+    print(
+        f"Models processed successfully: {len(model_layers) - len(failed_models)}/{len(model_layers)}"
+    )
     if failed_models:
         print(f"\nFailed models ({len(failed_models)}):")
         for fm in failed_models:
