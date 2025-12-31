@@ -21,31 +21,28 @@ dependencies = [
     "torch>=2.2",
     "transformers>=4.40",
     "nnsight>=0.4.11",
-
     # Data processing and analysis
     "numpy>=1.26",
     "pandas>=2.2",
     "scipy>=1.11",
     "datasets>=2.19",
     "pyarrow>=14",
-
     # Visualization
     "matplotlib>=3.8",
     "seaborn>=0.13",
-
     # Utilities and tools
     "tqdm>=4.66",
     "loguru>=0.7",
     "requests>=2.31",
-
     # Hugging Face tooling
     "huggingface-hub>=0.20",
-
     # Tokengrams for n-gram indexing
     "tokengrams>=0.3.3",
-
     # Testing
     "pytest>=8.0",
+    "scikit-learn>=1.7.2",
+    "hdbscan>=0.8.40",
+    "nnterp>=1.2.2",
 ]
 
 [tool.ruff]
@@ -87,5 +84,10 @@ include = [
   "neuron_embeddings.*",
   "jsd_polysemanticity",
   "jsd_polysemanticity.*"
+]
+
+[dependency-groups]
+dev = [
+    "ty>=0.0.7",
 ]
 
