@@ -1,0 +1,391 @@
+# Legal N-gram Synonym Dataset Generation
+# Purpose: Generate high-frequency / low-frequency synonym pairs for JSD analysis
+# Strategy: Use curated synonym pairs to ensure diversity and validity
+strategy: GENERAL
+num_samples: 200
+output_path: ./data/legal_ngrams.jsonl
+
+strategy_params:
+  sampled_attributes:
+    # Pre-defined verified synonym pairs to ensure diversity and correctness
+    - id: synonym_pair_seed
+      name: Synonym Pair
+      description: A verified high-frequency / low-frequency legal synonym pair
+      possible_values:
+        # Crimes and Offenses
+        - id: theft
+          name: theft / larceny
+          description: '{"high": "theft", "low": "larceny", "category": "crimes"}'
+        - id: murder
+          name: murder / homicide
+          description: '{"high": "murder", "low": "homicide", "category": "crimes"}'
+        - id: fraud
+          name: fraud / misrepresentation
+          description: '{"high": "fraud", "low": "misrepresentation", "category": "crimes"}'
+        - id: assault
+          name: assault / battery
+          description: '{"high": "assault", "low": "battery", "category": "crimes"}'
+        - id: robbery
+          name: robbery / larceny by force
+          description: '{"high": "robbery", "low": "larceny by force", "category": "crimes"}'
+        - id: arson
+          name: arson / incendiarism
+          description: '{"high": "arson", "low": "incendiarism", "category": "crimes"}'
+        - id: kidnapping
+          name: kidnapping / abduction
+          description: '{"high": "kidnapping", "low": "abduction", "category": "crimes"}'
+        - id: bribery
+          name: bribery / corruption
+          description: '{"high": "bribery", "low": "corruption", "category": "crimes"}'
+        - id: perjury
+          name: lying under oath / perjury
+          description: '{"high": "lying under oath", "low": "perjury", "category": "crimes"}'
+        - id: forgery
+          name: forgery / counterfeiting
+          description: '{"high": "forgery", "low": "counterfeiting", "category": "crimes"}'
+        - id: trespassing
+          name: trespassing / unlawful entry
+          description: '{"high": "trespassing", "low": "unlawful entry", "category": "crimes"}'
+        - id: burglary
+          name: break-in / burglary
+          description: '{"high": "break-in", "low": "burglary", "category": "crimes"}'
+
+        # Court Procedures
+        - id: trial
+          name: trial / adjudication
+          description: '{"high": "trial", "low": "adjudication", "category": "procedures"}'
+        - id: appeal
+          name: appeal / appellate review
+          description: '{"high": "appeal", "low": "appellate review", "category": "procedures"}'
+        - id: verdict
+          name: verdict / judgment
+          description: '{"high": "verdict", "low": "judgment", "category": "procedures"}'
+        - id: hearing
+          name: hearing / proceeding
+          description: '{"high": "hearing", "low": "proceeding", "category": "procedures"}'
+        - id: plea
+          name: plea / pleading
+          description: '{"high": "plea", "low": "pleading", "category": "procedures"}'
+        - id: testimony
+          name: testimony / deposition
+          description: '{"high": "testimony", "low": "deposition", "category": "procedures"}'
+        - id: questioning
+          name: questioning / interrogation
+          description: '{"high": "questioning", "low": "interrogation", "category": "procedures"}'
+        - id: cross_examination
+          name: cross-examination / cross-interrogation
+          description: '{"high": "cross-examination", "low": "cross-interrogation", "category": "procedures"}'
+        - id: sentencing
+          name: sentencing / adjudging
+          description: '{"high": "sentencing", "low": "adjudging", "category": "procedures"}'
+        - id: arraignment
+          name: first hearing / arraignment
+          description: '{"high": "first hearing", "low": "arraignment", "category": "procedures"}'
+        - id: indictment
+          name: formal charge / indictment
+          description: '{"high": "formal charge", "low": "indictment", "category": "procedures"}'
+        - id: subpoena
+          name: court order / subpoena
+          description: '{"high": "court order", "low": "subpoena", "category": "procedures"}'
+
+        # Legal Documents
+        - id: will
+          name: will / testament
+          description: '{"high": "will", "low": "testament", "category": "documents"}'
+        - id: contract
+          name: contract / agreement
+          description: '{"high": "contract", "low": "agreement", "category": "documents"}'
+        - id: deed
+          name: deed / conveyance
+          description: '{"high": "deed", "low": "conveyance", "category": "documents"}'
+        - id: lease
+          name: lease / tenancy agreement
+          description: '{"high": "lease", "low": "tenancy agreement", "category": "documents"}'
+        - id: warrant
+          name: warrant / writ
+          description: '{"high": "warrant", "low": "writ", "category": "documents"}'
+        - id: affidavit
+          name: sworn statement / affidavit
+          description: '{"high": "sworn statement", "low": "affidavit", "category": "documents"}'
+        - id: power_of_attorney
+          name: power of attorney / letter of attorney
+          description: '{"high": "power of attorney", "low": "letter of attorney", "category": "documents"}'
+        - id: injunction
+          name: court order / injunction
+          description: '{"high": "court order", "low": "injunction", "category": "documents"}'
+        - id: motion
+          name: request / motion
+          description: '{"high": "request", "low": "motion", "category": "documents"}'
+        - id: brief
+          name: legal argument / brief
+          description: '{"high": "legal argument", "low": "brief", "category": "documents"}'
+
+        # Penalties and Sentencing
+        - id: jail
+          name: jail / incarceration
+          description: '{"high": "jail", "low": "incarceration", "category": "penalties"}'
+        - id: fine
+          name: fine / pecuniary penalty
+          description: '{"high": "fine", "low": "pecuniary penalty", "category": "penalties"}'
+        - id: probation
+          name: probation / supervised release
+          description: '{"high": "probation", "low": "supervised release", "category": "penalties"}'
+        - id: parole
+          name: parole / conditional release
+          description: '{"high": "parole", "low": "conditional release", "category": "penalties"}'
+        - id: bail
+          name: bail / surety
+          description: '{"high": "bail", "low": "surety", "category": "penalties"}'
+        - id: death_penalty
+          name: death penalty / capital punishment
+          description: '{"high": "death penalty", "low": "capital punishment", "category": "penalties"}'
+        - id: community_service
+          name: community service / compulsory service
+          description: '{"high": "community service", "low": "compulsory service", "category": "penalties"}'
+        - id: house_arrest
+          name: house arrest / home confinement
+          description: '{"high": "house arrest", "low": "home confinement", "category": "penalties"}'
+        - id: restitution
+          name: payback / restitution
+          description: '{"high": "payback", "low": "restitution", "category": "penalties"}'
+        - id: forfeiture
+          name: seizure / forfeiture
+          description: '{"high": "seizure", "low": "forfeiture", "category": "penalties"}'
+
+        # Property Law
+        - id: ownership
+          name: ownership / title
+          description: '{"high": "ownership", "low": "title", "category": "property"}'
+        - id: mortgage
+          name: mortgage / lien
+          description: '{"high": "mortgage", "low": "lien", "category": "property"}'
+        - id: eviction
+          name: eviction / dispossession
+          description: '{"high": "eviction", "low": "dispossession", "category": "property"}'
+        - id: landlord
+          name: landlord / lessor
+          description: '{"high": "landlord", "low": "lessor", "category": "property"}'
+        - id: tenant
+          name: tenant / lessee
+          description: '{"high": "tenant", "low": "lessee", "category": "property"}'
+        - id: easement
+          name: right of way / easement
+          description: '{"high": "right of way", "low": "easement", "category": "property"}'
+        - id: zoning
+          name: zoning / land use regulation
+          description: '{"high": "zoning", "low": "land use regulation", "category": "property"}'
+        - id: eminent_domain
+          name: government taking / eminent domain
+          description: '{"high": "government taking", "low": "eminent domain", "category": "property"}'
+
+        # Family Law
+        - id: divorce
+          name: divorce / dissolution of marriage
+          description: '{"high": "divorce", "low": "dissolution of marriage", "category": "family"}'
+        - id: custody
+          name: custody / guardianship
+          description: '{"high": "custody", "low": "guardianship", "category": "family"}'
+        - id: alimony
+          name: alimony / spousal support
+          description: '{"high": "alimony", "low": "spousal support", "category": "family"}'
+        - id: adoption
+          name: adoption / legal parentage
+          description: '{"high": "adoption", "low": "legal parentage", "category": "family"}'
+        - id: child_support
+          name: child support / maintenance
+          description: '{"high": "child support", "low": "maintenance", "category": "family"}'
+        - id: prenup
+          name: prenup / prenuptial agreement
+          description: '{"high": "prenup", "low": "prenuptial agreement", "category": "family"}'
+        - id: annulment
+          name: annulment / nullification
+          description: '{"high": "annulment", "low": "nullification", "category": "family"}'
+        - id: paternity
+          name: fatherhood / paternity
+          description: '{"high": "fatherhood", "low": "paternity", "category": "family"}'
+
+        # Civil Disputes
+        - id: lawsuit
+          name: lawsuit / litigation
+          description: '{"high": "lawsuit", "low": "litigation", "category": "civil"}'
+        - id: settlement
+          name: settlement / accord
+          description: '{"high": "settlement", "low": "accord", "category": "civil"}'
+        - id: damages
+          name: damages / compensation
+          description: '{"high": "damages", "low": "compensation", "category": "civil"}'
+        - id: negligence
+          name: negligence / dereliction
+          description: '{"high": "negligence", "low": "dereliction", "category": "civil"}'
+        - id: liability
+          name: liability / culpability
+          description: '{"high": "liability", "low": "culpability", "category": "civil"}'
+        - id: breach
+          name: breach / violation
+          description: '{"high": "breach", "low": "violation", "category": "civil"}'
+        - id: malpractice
+          name: malpractice / professional negligence
+          description: '{"high": "malpractice", "low": "professional negligence", "category": "civil"}'
+        - id: slander
+          name: slander / defamation
+          description: '{"high": "slander", "low": "defamation", "category": "civil"}'
+
+        # Legal Parties
+        - id: defendant
+          name: defendant / accused
+          description: '{"high": "defendant", "low": "accused", "category": "parties"}'
+        - id: plaintiff
+          name: plaintiff / complainant
+          description: '{"high": "plaintiff", "low": "complainant", "category": "parties"}'
+        - id: witness
+          name: witness / deponent
+          description: '{"high": "witness", "low": "deponent", "category": "parties"}'
+        - id: lawyer
+          name: lawyer / attorney
+          description: '{"high": "lawyer", "low": "attorney", "category": "parties"}'
+        - id: prosecutor
+          name: prosecutor / district attorney
+          description: '{"high": "prosecutor", "low": "district attorney", "category": "parties"}'
+        - id: guardian
+          name: guardian / conservator
+          description: '{"high": "guardian", "low": "conservator", "category": "parties"}'
+        - id: heir
+          name: heir / beneficiary
+          description: '{"high": "heir", "low": "beneficiary", "category": "parties"}'
+        - id: executor
+          name: executor / personal representative
+          description: '{"high": "executor", "low": "personal representative", "category": "parties"}'
+
+  generated_attributes:
+    # Extract high-frequency term from the seed
+    - id: high_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the high-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "high" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract low-frequency term from the seed
+    - id: low_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the low-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "low" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract category from the seed
+    - id: category
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the category from the JSON. Return ONLY the category, nothing else.
+        - role: USER
+          content: |
+            Extract the "category" value from: {synonym_pair_seed.description}
+            Return ONLY the category.
+
+    # Generate shared definition
+    - id: shared_meaning
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a legal lexicographer. Provide a concise, accurate definition.
+        - role: USER
+          content: |
+            Write a 10-20 word definition for the legal term pair:
+            - Common term: {high_freq_ngram}
+            - Technical term: {low_freq_ngram}
+
+            The definition must apply equally to BOTH terms.
+            Return ONLY the definition.
+
+    # Generate a simple sentence template with a placeholder
+    - id: sentence_template
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a legal writer. Create a simple sentence with a placeholder for the legal term.
+
+            RULES:
+            1. Write a natural, simple sentence (10-15 words)
+            2. Use [TERM] as a placeholder where the legal term should go
+            3. The sentence should work equally well with either the common or technical term
+            4. Keep the sentence structure simple so substitution is seamless
+            5. Do NOT include both terms - just use [TERM] once
+        - role: USER
+          content: |
+            Create a simple legal sentence template using [TERM] as placeholder.
+            The term being described: {high_freq_ngram} (also known as {low_freq_ngram})
+
+            Examples of good templates:
+            - "The judge ruled that the [TERM] was valid and enforceable."
+            - "The attorney filed for [TERM] on behalf of the client."
+            - "Evidence of [TERM] was presented during the court proceedings."
+
+            Return ONLY the sentence template with [TERM] placeholder.
+
+    # Generate the common sentence by substitution
+    - id: example_sentence_common
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{high_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+    # Generate the technical sentence by substitution
+    - id: example_sentence_technical
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{low_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+  # Transform into final structured format
+  transformed_attributes:
+    - id: final_output
+      transformation_strategy:
+        type: CHAT
+        chat_transform:
+          messages:
+            - role: USER
+              content: |
+                Create a JSON object:
+
+                {{
+                  "high_freq_term": "{high_freq_ngram}",
+                  "low_freq_term": "{low_freq_ngram}",
+                  "category": "{category}",
+                  "definition": "{shared_meaning}",
+                  "sentence_template": "{sentence_template}",
+                  "example_common": "{example_sentence_common}",
+                  "example_technical": "{example_sentence_technical}"
+                }}
+
+                Return ONLY the JSON object.
+
+inference_config:
+  model:
+    model_name: claude-sonnet-4-5
+  engine: ANTHROPIC
+  generation:
+    max_new_tokens: 256
+    temperature: 0.3
+  remote_params:
+    num_workers: 50
+    politeness_policy: 60
