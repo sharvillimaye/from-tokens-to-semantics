@@ -13,7 +13,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import pearsonr, spearmanr
+from scipy.stats import bootstrap, f_oneway, pearsonr, spearmanr
 
 # =============================================================================
 # CONFIG
@@ -337,6 +337,255 @@ def create_cross_dataset_plots(all_data: dict[str, pd.DataFrame], output_dir: Pa
 
 
 # =============================================================================
+# STATISTICAL RIGOR
+# =============================================================================
+
+
+def bootstrap_decay_ratio(df: pd.DataFrame, n_bootstrap: int = 1000, ci: float = 0.95) -> dict:
+    """
+    Compute bootstrap confidence interval for decay ratio (L5/L0).
+
+    Args:
+        df: DataFrame with jsd_layer_0 and jsd_layer_5 columns
+        n_bootstrap: Number of bootstrap samples
+        ci: Confidence level (default 0.95 for 95% CI)
+
+    Returns:
+        dict with mean, lower, upper bounds
+    """
+    l0_vals = df["jsd_layer_0"].dropna().values
+    l5_vals = df["jsd_layer_5"].dropna().values
+
+    # Compute point estimate
+    point_estimate = l5_vals.mean() / l0_vals.mean()
+
+    # Bootstrap resampling
+    n = len(l0_vals)
+    rng = np.random.default_rng(42)
+
+    bootstrap_ratios = []
+    for _ in range(n_bootstrap):
+        idx = rng.choice(n, size=n, replace=True)
+        l0_sample = l0_vals[idx]
+        l5_sample = l5_vals[idx]
+        ratio = l5_sample.mean() / l0_sample.mean() if l0_sample.mean() > 0 else np.nan
+        bootstrap_ratios.append(ratio)
+
+    bootstrap_ratios = np.array(bootstrap_ratios)
+    bootstrap_ratios = bootstrap_ratios[~np.isnan(bootstrap_ratios)]
+
+    # Compute CI
+    alpha = 1 - ci
+    lower = np.percentile(bootstrap_ratios, alpha / 2 * 100)
+    upper = np.percentile(bootstrap_ratios, (1 - alpha / 2) * 100)
+
+    return {
+        "mean": point_estimate,
+        "lower": lower,
+        "upper": upper,
+        "std": bootstrap_ratios.std(),
+    }
+
+
+def run_anova_across_domains(all_data: dict[str, pd.DataFrame], layer: int) -> dict:
+    """
+    Run one-way ANOVA to test if JSD differs significantly across domains.
+
+    Args:
+        all_data: dict mapping dataset name to DataFrame
+        layer: Layer index to test
+
+    Returns:
+        dict with F-statistic, p-value, and group means
+    """
+    col = f"jsd_layer_{layer}"
+    groups = []
+    group_names = []
+    group_means = {}
+
+    for name, df in all_data.items():
+        if col in df.columns:
+            vals = df[col].dropna().values
+            if len(vals) > 0:
+                groups.append(vals)
+                group_names.append(name)
+                group_means[name] = vals.mean()
+
+    if len(groups) < 2:
+        return {"f_stat": np.nan, "p_value": np.nan, "group_means": group_means}
+
+    # Run ANOVA
+    f_stat, p_value = f_oneway(*groups)
+
+    return {
+        "f_stat": f_stat,
+        "p_value": p_value,
+        "group_means": group_means,
+        "group_names": group_names,
+    }
+
+
+def compute_cohens_d(group1: np.ndarray, group2: np.ndarray) -> float:
+    """Compute Cohen's d effect size between two groups."""
+    n1, n2 = len(group1), len(group2)
+    var1, var2 = group1.var(ddof=1), group2.var(ddof=1)
+
+    # Pooled standard deviation
+    pooled_std = np.sqrt(((n1 - 1) * var1 + (n2 - 1) * var2) / (n1 + n2 - 2))
+
+    if pooled_std == 0:
+        return 0.0
+
+    return (group1.mean() - group2.mean()) / pooled_std
+
+
+def run_statistical_tests(all_data: dict[str, pd.DataFrame], output_dir: Path):
+    """
+    Run comprehensive statistical tests and save results.
+
+    Includes:
+    - Bootstrap CI for decay ratios
+    - ANOVA across domains
+    - Effect sizes (Cohen's d)
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    results.append("=" * 70)
+    results.append("STATISTICAL RIGOR ANALYSIS")
+    results.append("=" * 70)
+
+    # 1. Bootstrap CI for decay ratios
+    results.append("\n## 1. Bootstrap 95% CI for Decay Ratio (L5/L0)")
+    results.append("-" * 50)
+    results.append(f"{'Dataset':<12} | {'Mean':>8} | {'95% CI':>20} | {'Std':>8}")
+    results.append("-" * 50)
+
+    decay_ci_data = []
+    for name, df in all_data.items():
+        ci_result = bootstrap_decay_ratio(df)
+        decay_ci_data.append(
+            {
+                "dataset": name,
+                "mean": ci_result["mean"],
+                "lower": ci_result["lower"],
+                "upper": ci_result["upper"],
+                "std": ci_result["std"],
+            }
+        )
+        results.append(
+            f"{name:<12} | {ci_result['mean']:>8.3f} | "
+            f"[{ci_result['lower']:.3f}, {ci_result['upper']:.3f}] | "
+            f"{ci_result['std']:>8.3f}"
+        )
+
+    # 2. ANOVA across domains
+    results.append("\n## 2. One-way ANOVA (JSD by Domain)")
+    results.append("-" * 50)
+
+    anova_results = {}
+    for L in LAYERS:
+        anova = run_anova_across_domains(all_data, L)
+        anova_results[L] = anova
+        sig = (
+            "***"
+            if anova["p_value"] < 0.001
+            else "**"
+            if anova["p_value"] < 0.01
+            else "*"
+            if anova["p_value"] < 0.05
+            else ""
+        )
+        results.append(f"Layer {L}: F={anova['f_stat']:.3f}, p={anova['p_value']:.4f} {sig}")
+
+    results.append("\n(*** p<0.001, ** p<0.01, * p<0.05)")
+
+    # 3. Pairwise effect sizes for significant layers
+    results.append("\n## 3. Pairwise Effect Sizes (Cohen's d)")
+    results.append("-" * 50)
+
+    # Find layers with significant ANOVA
+    sig_layers = [L for L in LAYERS if anova_results[L]["p_value"] < 0.05]
+
+    if sig_layers:
+        results.append(f"Significant layers: {sig_layers}")
+
+        for L in sig_layers:
+            results.append(f"\nLayer {L} pairwise Cohen's d:")
+            col = f"jsd_layer_{L}"
+            datasets = list(all_data.keys())
+
+            for i, name1 in enumerate(datasets):
+                for name2 in datasets[i + 1 :]:
+                    g1 = all_data[name1][col].dropna().values
+                    g2 = all_data[name2][col].dropna().values
+                    d = compute_cohens_d(g1, g2)
+
+                    # Interpret effect size
+                    if abs(d) < 0.2:
+                        interp = "negligible"
+                    elif abs(d) < 0.5:
+                        interp = "small"
+                    elif abs(d) < 0.8:
+                        interp = "medium"
+                    else:
+                        interp = "large"
+
+                    results.append(f"  {name1} vs {name2}: d={d:+.3f} ({interp})")
+    else:
+        results.append("No layers showed significant domain differences.")
+
+    # 4. Summary
+    results.append("\n## 4. Summary")
+    results.append("-" * 50)
+
+    # Check if decay ratios are significantly different from 1.0
+    all_upper = [d["upper"] for d in decay_ci_data]
+    if all(u < 1.0 for u in all_upper):
+        results.append("- All decay ratios are significantly < 1.0 (CI upper bounds < 1)")
+        results.append("  --> JSD decay is a robust phenomenon across all domains")
+
+    # Report on domain differences
+    n_sig_anova = sum(1 for L in LAYERS if anova_results[L]["p_value"] < 0.05)
+    results.append(f"- {n_sig_anova}/{len(LAYERS)} layers show significant domain differences")
+
+    # Write to file
+    output_text = "\n".join(results)
+    stats_path = output_dir / "statistical_tests.txt"
+    with open(stats_path, "w") as f:
+        f.write(output_text)
+    print(f"Saved: {stats_path}")
+
+    # Print results
+    print(output_text)
+
+    # Create visualization of decay ratios with CI
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    names = [d["dataset"] for d in decay_ci_data]
+    means = [d["mean"] for d in decay_ci_data]
+    lowers = [d["mean"] - d["lower"] for d in decay_ci_data]
+    uppers = [d["upper"] - d["mean"] for d in decay_ci_data]
+
+    x = range(len(names))
+    ax.bar(x, means, yerr=[lowers, uppers], capsize=5, color="steelblue", alpha=0.7)
+    ax.axhline(y=1.0, color="red", linestyle="--", alpha=0.5, label="No decay (ratio=1)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=45, ha="right")
+    ax.set_ylabel("Decay Ratio (L5/L0)")
+    ax.set_title("JSD Decay Ratio with 95% Bootstrap CI")
+    ax.legend()
+    ax.set_ylim(0, max(means) * 1.5)
+
+    plt.tight_layout()
+    fig.savefig(output_dir / "decay_ratio_ci.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {output_dir}/decay_ratio_ci.png")
+
+    return anova_results, decay_ci_data
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -356,6 +605,10 @@ def main():
     output_dir = RUNS_DIR / "cross_dataset_analysis"
     print(f"\nGenerating cross-dataset plots to {output_dir}...")
     create_cross_dataset_plots(all_data, output_dir)
+
+    # Run statistical tests
+    print("\nRunning statistical tests...")
+    run_statistical_tests(all_data, output_dir)
 
     print("\n" + "=" * 70)
     print("KEY FINDINGS SUMMARY")
