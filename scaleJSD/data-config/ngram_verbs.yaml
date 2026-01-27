@@ -1,0 +1,434 @@
+# Action Verbs N-gram Synonym Dataset Generation
+# Purpose: Generate high-frequency / low-frequency synonym pairs for JSD analysis
+# Strategy: Use curated synonym pairs to ensure diversity and validity
+strategy: GENERAL
+num_samples: 200
+output_path: ./data/verb_ngrams.jsonl
+
+strategy_params:
+  sampled_attributes:
+    # Pre-defined verified synonym pairs to ensure diversity and correctness
+    - id: synonym_pair_seed
+      name: Synonym Pair
+      description: A verified high-frequency / low-frequency verb synonym pair
+      possible_values:
+        # Movement Verbs
+        - id: walk
+          name: walk / ambulate
+          description: '{"high": "walk", "low": "ambulate", "category": "movement"}'
+        - id: run
+          name: run / sprint
+          description: '{"high": "run", "low": "sprint", "category": "movement"}'
+        - id: jump
+          name: jump / leap
+          description: '{"high": "jump", "low": "leap", "category": "movement"}'
+        - id: climb
+          name: climb / ascend
+          description: '{"high": "climb", "low": "ascend", "category": "movement"}'
+        - id: crawl
+          name: crawl / creep
+          description: '{"high": "crawl", "low": "creep", "category": "movement"}'
+        - id: swim
+          name: swim / navigate
+          description: '{"high": "swim", "low": "navigate", "category": "movement"}'
+        - id: fly
+          name: fly / soar
+          description: '{"high": "fly", "low": "soar", "category": "movement"}'
+        - id: dance
+          name: dance / cavort
+          description: '{"high": "dance", "low": "cavort", "category": "movement"}'
+        - id: wander
+          name: wander / meander
+          description: '{"high": "wander", "low": "meander", "category": "movement"}'
+        - id: rush
+          name: rush / hasten
+          description: '{"high": "rush", "low": "hasten", "category": "movement"}'
+        - id: stroll
+          name: stroll / saunter
+          description: '{"high": "stroll", "low": "saunter", "category": "movement"}'
+        - id: stumble
+          name: stumble / falter
+          description: '{"high": "stumble", "low": "falter", "category": "movement"}'
+
+        # Cognitive Verbs
+        - id: think
+          name: think / cogitate
+          description: '{"high": "think", "low": "cogitate", "category": "cognitive"}'
+        - id: know
+          name: know / comprehend
+          description: '{"high": "know", "low": "comprehend", "category": "cognitive"}'
+        - id: understand
+          name: understand / fathom
+          description: '{"high": "understand", "low": "fathom", "category": "cognitive"}'
+        - id: remember
+          name: remember / recollect
+          description: '{"high": "remember", "low": "recollect", "category": "cognitive"}'
+        - id: forget
+          name: forget / disremember
+          description: '{"high": "forget", "low": "disremember", "category": "cognitive"}'
+        - id: learn
+          name: learn / acquire
+          description: '{"high": "learn", "low": "acquire", "category": "cognitive"}'
+        - id: believe
+          name: believe / surmise
+          description: '{"high": "believe", "low": "surmise", "category": "cognitive"}'
+        - id: guess
+          name: guess / conjecture
+          description: '{"high": "guess", "low": "conjecture", "category": "cognitive"}'
+        - id: wonder
+          name: wonder / ponder
+          description: '{"high": "wonder", "low": "ponder", "category": "cognitive"}'
+        - id: doubt
+          name: doubt / question
+          description: '{"high": "doubt", "low": "question", "category": "cognitive"}'
+        - id: realize
+          name: realize / apprehend
+          description: '{"high": "realize", "low": "apprehend", "category": "cognitive"}'
+        - id: imagine
+          name: imagine / envision
+          description: '{"high": "imagine", "low": "envision", "category": "cognitive"}'
+
+        # Communication Verbs
+        - id: say
+          name: say / utter
+          description: '{"high": "say", "low": "utter", "category": "communication"}'
+        - id: tell
+          name: tell / relate
+          description: '{"high": "tell", "low": "relate", "category": "communication"}'
+        - id: ask
+          name: ask / inquire
+          description: '{"high": "ask", "low": "inquire", "category": "communication"}'
+        - id: shout
+          name: shout / vociferate
+          description: '{"high": "shout", "low": "vociferate", "category": "communication"}'
+        - id: whisper
+          name: whisper / murmur
+          description: '{"high": "whisper", "low": "murmur", "category": "communication"}'
+        - id: talk
+          name: talk / converse
+          description: '{"high": "talk", "low": "converse", "category": "communication"}'
+        - id: speak
+          name: speak / articulate
+          description: '{"high": "speak", "low": "articulate", "category": "communication"}'
+        - id: yell
+          name: yell / bellow
+          description: '{"high": "yell", "low": "bellow", "category": "communication"}'
+        - id: announce
+          name: announce / proclaim
+          description: '{"high": "announce", "low": "proclaim", "category": "communication"}'
+        - id: explain
+          name: explain / elucidate
+          description: '{"high": "explain", "low": "elucidate", "category": "communication"}'
+        - id: argue
+          name: argue / dispute
+          description: '{"high": "argue", "low": "dispute", "category": "communication"}'
+        - id: complain
+          name: complain / lament
+          description: '{"high": "complain", "low": "lament", "category": "communication"}'
+
+        # Perception Verbs
+        - id: see
+          name: see / perceive
+          description: '{"high": "see", "low": "perceive", "category": "perception"}'
+        - id: hear
+          name: hear / discern
+          description: '{"high": "hear", "low": "discern", "category": "perception"}'
+        - id: feel
+          name: feel / sense
+          description: '{"high": "feel", "low": "sense", "category": "perception"}'
+        - id: smell
+          name: smell / detect
+          description: '{"high": "smell", "low": "detect", "category": "perception"}'
+        - id: taste
+          name: taste / savor
+          description: '{"high": "taste", "low": "savor", "category": "perception"}'
+        - id: watch
+          name: watch / observe
+          description: '{"high": "watch", "low": "observe", "category": "perception"}'
+        - id: listen
+          name: listen / heed
+          description: '{"high": "listen", "low": "heed", "category": "perception"}'
+        - id: notice
+          name: notice / discern
+          description: '{"high": "notice", "low": "discern", "category": "perception"}'
+        - id: look
+          name: look / gaze
+          description: '{"high": "look", "low": "gaze", "category": "perception"}'
+        - id: stare
+          name: stare / gawk
+          description: '{"high": "stare", "low": "gawk", "category": "perception"}'
+        - id: glance
+          name: glance / glimpse
+          description: '{"high": "glance", "low": "glimpse", "category": "perception"}'
+        - id: spot
+          name: spot / espy
+          description: '{"high": "spot", "low": "espy", "category": "perception"}'
+
+        # Consumption Verbs
+        - id: eat
+          name: eat / consume
+          description: '{"high": "eat", "low": "consume", "category": "consumption"}'
+        - id: drink
+          name: drink / imbibe
+          description: '{"high": "drink", "low": "imbibe", "category": "consumption"}'
+        - id: swallow
+          name: swallow / ingest
+          description: '{"high": "swallow", "low": "ingest", "category": "consumption"}'
+        - id: chew
+          name: chew / masticate
+          description: '{"high": "chew", "low": "masticate", "category": "consumption"}'
+        - id: sip
+          name: sip / sup
+          description: '{"high": "sip", "low": "sup", "category": "consumption"}'
+        - id: devour
+          name: devour / gorge
+          description: '{"high": "devour", "low": "gorge", "category": "consumption"}'
+        - id: gulp
+          name: gulp / quaff
+          description: '{"high": "gulp", "low": "quaff", "category": "consumption"}'
+        - id: munch
+          name: munch / nibble
+          description: '{"high": "munch", "low": "nibble", "category": "consumption"}'
+        - id: bite
+          name: bite / gnaw
+          description: '{"high": "bite", "low": "gnaw", "category": "consumption"}'
+        - id: feast
+          name: feast / banquet
+          description: '{"high": "feast", "low": "banquet", "category": "consumption"}'
+
+        # Creation Verbs
+        - id: make
+          name: make / fabricate
+          description: '{"high": "make", "low": "fabricate", "category": "creation"}'
+        - id: build
+          name: build / construct
+          description: '{"high": "build", "low": "construct", "category": "creation"}'
+        - id: create
+          name: create / generate
+          description: '{"high": "create", "low": "generate", "category": "creation"}'
+        - id: write
+          name: write / compose
+          description: '{"high": "write", "low": "compose", "category": "creation"}'
+        - id: draw
+          name: draw / sketch
+          description: '{"high": "draw", "low": "sketch", "category": "creation"}'
+        - id: design
+          name: design / devise
+          description: '{"high": "design", "low": "devise", "category": "creation"}'
+        - id: craft
+          name: craft / fashion
+          description: '{"high": "craft", "low": "fashion", "category": "creation"}'
+        - id: invent
+          name: invent / contrive
+          description: '{"high": "invent", "low": "contrive", "category": "creation"}'
+        - id: produce
+          name: produce / manufacture
+          description: '{"high": "produce", "low": "manufacture", "category": "creation"}'
+        - id: form
+          name: form / mold
+          description: '{"high": "form", "low": "mold", "category": "creation"}'
+
+        # Destruction Verbs
+        - id: break
+          name: break / shatter
+          description: '{"high": "break", "low": "shatter", "category": "destruction"}'
+        - id: destroy
+          name: destroy / demolish
+          description: '{"high": "destroy", "low": "demolish", "category": "destruction"}'
+        - id: smash
+          name: smash / pulverize
+          description: '{"high": "smash", "low": "pulverize", "category": "destruction"}'
+        - id: tear
+          name: tear / rend
+          description: '{"high": "tear", "low": "rend", "category": "destruction"}'
+        - id: rip
+          name: rip / sever
+          description: '{"high": "rip", "low": "sever", "category": "destruction"}'
+        - id: crush
+          name: crush / compress
+          description: '{"high": "crush", "low": "compress", "category": "destruction"}'
+        - id: wreck
+          name: wreck / devastate
+          description: '{"high": "wreck", "low": "devastate", "category": "destruction"}'
+        - id: ruin
+          name: ruin / ravage
+          description: '{"high": "ruin", "low": "ravage", "category": "destruction"}'
+        - id: crack
+          name: crack / fracture
+          description: '{"high": "crack", "low": "fracture", "category": "destruction"}'
+        - id: burn
+          name: burn / incinerate
+          description: '{"high": "burn", "low": "incinerate", "category": "destruction"}'
+
+        # Emotional Verbs
+        - id: love
+          name: love / adore
+          description: '{"high": "love", "low": "adore", "category": "emotional"}'
+        - id: hate
+          name: hate / loathe
+          description: '{"high": "hate", "low": "loathe", "category": "emotional"}'
+        - id: like
+          name: like / fancy
+          description: '{"high": "like", "low": "fancy", "category": "emotional"}'
+        - id: fear
+          name: fear / dread
+          description: '{"high": "fear", "low": "dread", "category": "emotional"}'
+        - id: enjoy
+          name: enjoy / relish
+          description: '{"high": "enjoy", "low": "relish", "category": "emotional"}'
+        - id: cherish
+          name: cherish / treasure
+          description: '{"high": "cherish", "low": "treasure", "category": "emotional"}'
+        - id: worry
+          name: worry / fret
+          description: '{"high": "worry", "low": "fret", "category": "emotional"}'
+        - id: hope
+          name: hope / aspire
+          description: '{"high": "hope", "low": "aspire", "category": "emotional"}'
+        - id: wish
+          name: wish / yearn
+          description: '{"high": "wish", "low": "yearn", "category": "emotional"}'
+        - id: want
+          name: want / desire
+          description: '{"high": "want", "low": "desire", "category": "emotional"}'
+        - id: miss
+          name: miss / pine
+          description: '{"high": "miss", "low": "pine", "category": "emotional"}'
+        - id: regret
+          name: regret / rue
+          description: '{"high": "regret", "low": "rue", "category": "emotional"}'
+
+  generated_attributes:
+    # Extract high-frequency term from the seed
+    - id: high_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the high-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "high" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract low-frequency term from the seed
+    - id: low_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the low-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "low" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract category from the seed
+    - id: category
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the category from the JSON. Return ONLY the category, nothing else.
+        - role: USER
+          content: |
+            Extract the "category" value from: {synonym_pair_seed.description}
+            Return ONLY the category.
+
+    # Generate shared definition
+    - id: shared_meaning
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a lexicographer. Provide a concise, accurate definition.
+        - role: USER
+          content: |
+            Write a 10-20 word definition for the verb pair:
+            - Common verb: {high_freq_ngram}
+            - Formal verb: {low_freq_ngram}
+
+            The definition must apply equally to BOTH verbs.
+            Return ONLY the definition.
+
+    # Generate a simple sentence template with a placeholder
+    - id: sentence_template
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a writer. Create a simple sentence with a placeholder for the verb.
+
+            RULES:
+            1. Write a natural, simple sentence (10-15 words)
+            2. Use [TERM] as a placeholder where the verb should go
+            3. The sentence should work equally well with either the common or formal verb
+            4. Keep the sentence structure simple so substitution is seamless
+            5. Do NOT include both verbs - just use [TERM] once
+            6. Use a form that works with both verbs (e.g., "to [TERM]" or "would [TERM]")
+        - role: USER
+          content: |
+            Create a simple sentence template using [TERM] as placeholder.
+            The verb being described: {high_freq_ngram} (also known as {low_freq_ngram})
+
+            Examples of good templates:
+            - "The child began to [TERM] across the playground with excitement."
+            - "She would often [TERM] when feeling nervous about the situation."
+            - "He decided to [TERM] the old furniture in the garage."
+
+            Return ONLY the sentence template with [TERM] placeholder.
+
+    # Generate the common sentence by substitution
+    - id: example_sentence_common
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{high_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+    # Generate the technical sentence by substitution
+    - id: example_sentence_technical
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{low_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+  # Transform into final structured format
+  transformed_attributes:
+    - id: final_output
+      transformation_strategy:
+        type: CHAT
+        chat_transform:
+          messages:
+            - role: USER
+              content: |
+                Create a JSON object:
+
+                {{
+                  "high_freq_term": "{high_freq_ngram}",
+                  "low_freq_term": "{low_freq_ngram}",
+                  "category": "{category}",
+                  "definition": "{shared_meaning}",
+                  "sentence_template": "{sentence_template}",
+                  "example_common": "{example_sentence_common}",
+                  "example_technical": "{example_sentence_technical}"
+                }}
+
+                Return ONLY the JSON object.
+
+inference_config:
+  model:
+    model_name: claude-sonnet-4-5
+  engine: ANTHROPIC
+  generation:
+    max_new_tokens: 256
+    temperature: 0.3
+  remote_params:
+    num_workers: 50
+    politeness_policy: 60

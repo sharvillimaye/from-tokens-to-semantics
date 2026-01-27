@@ -1,0 +1,409 @@
+# Medical N-gram Synonym Dataset Generation
+# Purpose: Generate high-frequency / low-frequency synonym pairs for JSD analysis
+# Strategy: Use curated synonym pairs to ensure diversity and validity
+strategy: GENERAL
+num_samples: 200
+output_path: ./data/medical_ngrams.jsonl
+
+strategy_params:
+  sampled_attributes:
+    # Pre-defined verified synonym pairs to ensure diversity and correctness
+    - id: synonym_pair_seed
+      name: Synonym Pair
+      description: A verified high-frequency / low-frequency medical synonym pair
+      possible_values:
+        # Diseases and Conditions
+        - id: heart_attack
+          name: heart attack / myocardial infarction
+          description: '{"high": "heart attack", "low": "myocardial infarction", "category": "diseases"}'
+        - id: stroke
+          name: stroke / cerebrovascular accident
+          description: '{"high": "stroke", "low": "cerebrovascular accident", "category": "diseases"}'
+        - id: chickenpox
+          name: chickenpox / varicella
+          description: '{"high": "chickenpox", "low": "varicella", "category": "diseases"}'
+        - id: shingles
+          name: shingles / herpes zoster
+          description: '{"high": "shingles", "low": "herpes zoster", "category": "diseases"}'
+        - id: measles
+          name: measles / rubeola
+          description: '{"high": "measles", "low": "rubeola", "category": "diseases"}'
+        - id: mumps
+          name: mumps / parotitis
+          description: '{"high": "mumps", "low": "parotitis", "category": "diseases"}'
+        - id: whooping_cough
+          name: whooping cough / pertussis
+          description: '{"high": "whooping cough", "low": "pertussis", "category": "diseases"}'
+        - id: lockjaw
+          name: lockjaw / tetanus
+          description: '{"high": "lockjaw", "low": "tetanus", "category": "diseases"}'
+        - id: german_measles
+          name: German measles / rubella
+          description: '{"high": "German measles", "low": "rubella", "category": "diseases"}'
+        - id: mono
+          name: mono / infectious mononucleosis
+          description: '{"high": "mono", "low": "infectious mononucleosis", "category": "diseases"}'
+        - id: rabies
+          name: rabies / hydrophobia
+          description: '{"high": "rabies", "low": "hydrophobia", "category": "diseases"}'
+        - id: cancer
+          name: cancer / malignant neoplasm
+          description: '{"high": "cancer", "low": "malignant neoplasm", "category": "diseases"}'
+        - id: tumor
+          name: tumor / neoplasm
+          description: '{"high": "tumor", "low": "neoplasm", "category": "diseases"}'
+        - id: high_blood_pressure
+          name: high blood pressure / hypertension
+          description: '{"high": "high blood pressure", "low": "hypertension", "category": "diseases"}'
+        - id: low_blood_sugar
+          name: low blood sugar / hypoglycemia
+          description: '{"high": "low blood sugar", "low": "hypoglycemia", "category": "diseases"}'
+        - id: high_blood_sugar
+          name: high blood sugar / hyperglycemia
+          description: '{"high": "high blood sugar", "low": "hyperglycemia", "category": "diseases"}'
+
+        # Symptoms and Signs
+        - id: fever
+          name: fever / pyrexia
+          description: '{"high": "fever", "low": "pyrexia", "category": "symptoms"}'
+        - id: headache
+          name: headache / cephalalgia
+          description: '{"high": "headache", "low": "cephalalgia", "category": "symptoms"}'
+        - id: nosebleed
+          name: nosebleed / epistaxis
+          description: '{"high": "nosebleed", "low": "epistaxis", "category": "symptoms"}'
+        - id: bruise
+          name: bruise / contusion
+          description: '{"high": "bruise", "low": "contusion", "category": "symptoms"}'
+        - id: hives
+          name: hives / urticaria
+          description: '{"high": "hives", "low": "urticaria", "category": "symptoms"}'
+        - id: fainting
+          name: fainting / syncope
+          description: '{"high": "fainting", "low": "syncope", "category": "symptoms"}'
+        - id: vomiting
+          name: vomiting / emesis
+          description: '{"high": "vomiting", "low": "emesis", "category": "symptoms"}'
+        - id: itching
+          name: itching / pruritus
+          description: '{"high": "itching", "low": "pruritus", "category": "symptoms"}'
+        - id: swelling
+          name: swelling / edema
+          description: '{"high": "swelling", "low": "edema", "category": "symptoms"}'
+        - id: ringing_in_ears
+          name: ringing in ears / tinnitus
+          description: '{"high": "ringing in ears", "low": "tinnitus", "category": "symptoms"}'
+        - id: dizziness
+          name: dizziness / vertigo
+          description: '{"high": "dizziness", "low": "vertigo", "category": "symptoms"}'
+        - id: bad_breath
+          name: bad breath / halitosis
+          description: '{"high": "bad breath", "low": "halitosis", "category": "symptoms"}'
+        - id: hair_loss
+          name: hair loss / alopecia
+          description: '{"high": "hair loss", "low": "alopecia", "category": "symptoms"}'
+        - id: excessive_sweating
+          name: excessive sweating / hyperhidrosis
+          description: '{"high": "excessive sweating", "low": "hyperhidrosis", "category": "symptoms"}'
+        - id: chest_pain
+          name: chest pain / angina
+          description: '{"high": "chest pain", "low": "angina", "category": "symptoms"}'
+        - id: shortness_of_breath
+          name: shortness of breath / dyspnea
+          description: '{"high": "shortness of breath", "low": "dyspnea", "category": "symptoms"}'
+        - id: difficulty_swallowing
+          name: difficulty swallowing / dysphagia
+          description: '{"high": "difficulty swallowing", "low": "dysphagia", "category": "symptoms"}'
+        - id: painful_urination
+          name: painful urination / dysuria
+          description: '{"high": "painful urination", "low": "dysuria", "category": "symptoms"}'
+
+        # Body Parts and Anatomy
+        - id: kneecap
+          name: kneecap / patella
+          description: '{"high": "kneecap", "low": "patella", "category": "anatomy"}'
+        - id: collarbone
+          name: collarbone / clavicle
+          description: '{"high": "collarbone", "low": "clavicle", "category": "anatomy"}'
+        - id: tailbone
+          name: tailbone / coccyx
+          description: '{"high": "tailbone", "low": "coccyx", "category": "anatomy"}'
+        - id: breastbone
+          name: breastbone / sternum
+          description: '{"high": "breastbone", "low": "sternum", "category": "anatomy"}'
+        - id: shoulder_blade
+          name: shoulder blade / scapula
+          description: '{"high": "shoulder blade", "low": "scapula", "category": "anatomy"}'
+        - id: voice_box
+          name: voice box / larynx
+          description: '{"high": "voice box", "low": "larynx", "category": "anatomy"}'
+        - id: windpipe
+          name: windpipe / trachea
+          description: '{"high": "windpipe", "low": "trachea", "category": "anatomy"}'
+        - id: eardrum
+          name: eardrum / tympanic membrane
+          description: '{"high": "eardrum", "low": "tympanic membrane", "category": "anatomy"}'
+        - id: belly_button
+          name: belly button / umbilicus
+          description: '{"high": "belly button", "low": "umbilicus", "category": "anatomy"}'
+        - id: thighbone
+          name: thighbone / femur
+          description: '{"high": "thighbone", "low": "femur", "category": "anatomy"}'
+        - id: shinbone
+          name: shinbone / tibia
+          description: '{"high": "shinbone", "low": "tibia", "category": "anatomy"}'
+        - id: skull
+          name: skull / cranium
+          description: '{"high": "skull", "low": "cranium", "category": "anatomy"}'
+        - id: spine
+          name: spine / vertebral column
+          description: '{"high": "spine", "low": "vertebral column", "category": "anatomy"}'
+        - id: rib_cage
+          name: rib cage / thoracic cage
+          description: '{"high": "rib cage", "low": "thoracic cage", "category": "anatomy"}'
+        - id: armpit
+          name: armpit / axilla
+          description: '{"high": "armpit", "low": "axilla", "category": "anatomy"}'
+        - id: groin
+          name: groin / inguinal region
+          description: '{"high": "groin", "low": "inguinal region", "category": "anatomy"}'
+
+        # Infectious Diseases
+        - id: pink_eye
+          name: pink eye / conjunctivitis
+          description: '{"high": "pink eye", "low": "conjunctivitis", "category": "infectious"}'
+        - id: cold_sore
+          name: cold sore / herpes labialis
+          description: '{"high": "cold sore", "low": "herpes labialis", "category": "infectious"}'
+        - id: athletes_foot
+          name: athlete''s foot / tinea pedis
+          description: '{"high": "athlete''s foot", "low": "tinea pedis", "category": "infectious"}'
+        - id: ringworm
+          name: ringworm / tinea corporis
+          description: '{"high": "ringworm", "low": "tinea corporis", "category": "infectious"}'
+        - id: jock_itch
+          name: jock itch / tinea cruris
+          description: '{"high": "jock itch", "low": "tinea cruris", "category": "infectious"}'
+        - id: strep_throat
+          name: strep throat / streptococcal pharyngitis
+          description: '{"high": "strep throat", "low": "streptococcal pharyngitis", "category": "infectious"}'
+        - id: staph_infection
+          name: staph infection / staphylococcal infection
+          description: '{"high": "staph infection", "low": "staphylococcal infection", "category": "infectious"}'
+        - id: yeast_infection
+          name: yeast infection / candidiasis
+          description: '{"high": "yeast infection", "low": "candidiasis", "category": "infectious"}'
+        - id: thrush
+          name: thrush / oral candidiasis
+          description: '{"high": "thrush", "low": "oral candidiasis", "category": "infectious"}'
+
+        # Chronic Conditions / Vision
+        - id: nearsightedness
+          name: nearsightedness / myopia
+          description: '{"high": "nearsightedness", "low": "myopia", "category": "chronic"}'
+        - id: farsightedness
+          name: farsightedness / hyperopia
+          description: '{"high": "farsightedness", "low": "hyperopia", "category": "chronic"}'
+        - id: lazy_eye
+          name: lazy eye / amblyopia
+          description: '{"high": "lazy eye", "low": "amblyopia", "category": "chronic"}'
+        - id: cross_eyed
+          name: cross-eyed / strabismus
+          description: '{"high": "cross-eyed", "low": "strabismus", "category": "chronic"}'
+        - id: color_blindness
+          name: color blindness / color vision deficiency
+          description: '{"high": "color blindness", "low": "color vision deficiency", "category": "chronic"}'
+
+        # Mental Health / Sleep
+        - id: sleepwalking
+          name: sleepwalking / somnambulism
+          description: '{"high": "sleepwalking", "low": "somnambulism", "category": "mental"}'
+        - id: bedwetting
+          name: bedwetting / enuresis
+          description: '{"high": "bedwetting", "low": "enuresis", "category": "mental"}'
+        - id: teeth_grinding
+          name: teeth grinding / bruxism
+          description: '{"high": "teeth grinding", "low": "bruxism", "category": "mental"}'
+        - id: nail_biting
+          name: nail biting / onychophagia
+          description: '{"high": "nail biting", "low": "onychophagia", "category": "mental"}'
+
+        # Medical Procedures
+        - id: c_section
+          name: C-section / cesarean delivery
+          description: '{"high": "C-section", "low": "cesarean delivery", "category": "procedures"}'
+        - id: tummy_tuck
+          name: tummy tuck / abdominoplasty
+          description: '{"high": "tummy tuck", "low": "abdominoplasty", "category": "procedures"}'
+        - id: nose_job
+          name: nose job / rhinoplasty
+          description: '{"high": "nose job", "low": "rhinoplasty", "category": "procedures"}'
+        - id: face_lift
+          name: face lift / rhytidectomy
+          description: '{"high": "face lift", "low": "rhytidectomy", "category": "procedures"}'
+        - id: eyelid_surgery
+          name: eyelid surgery / blepharoplasty
+          description: '{"high": "eyelid surgery", "low": "blepharoplasty", "category": "procedures"}'
+        - id: liposuction
+          name: liposuction / lipoplasty
+          description: '{"high": "liposuction", "low": "lipoplasty", "category": "procedures"}'
+        - id: breast_reduction
+          name: breast reduction / reduction mammoplasty
+          description: '{"high": "breast reduction", "low": "reduction mammoplasty", "category": "procedures"}'
+        - id: kidney_stone_removal
+          name: kidney stone removal / lithotripsy
+          description: '{"high": "kidney stone removal", "low": "lithotripsy", "category": "procedures"}'
+
+        # Medications
+        - id: blood_thinner
+          name: blood thinner / anticoagulant
+          description: '{"high": "blood thinner", "low": "anticoagulant", "category": "medications"}'
+        - id: water_pill
+          name: water pill / diuretic
+          description: '{"high": "water pill", "low": "diuretic", "category": "medications"}'
+        - id: painkiller
+          name: painkiller / analgesic
+          description: '{"high": "painkiller", "low": "analgesic", "category": "medications"}'
+        - id: sleeping_pill
+          name: sleeping pill / hypnotic
+          description: '{"high": "sleeping pill", "low": "hypnotic", "category": "medications"}'
+        - id: steroid
+          name: steroid / corticosteroid
+          description: '{"high": "steroid", "low": "corticosteroid", "category": "medications"}'
+        - id: antacid
+          name: antacid / acid neutralizer
+          description: '{"high": "antacid", "low": "acid neutralizer", "category": "medications"}'
+
+  generated_attributes:
+    # Extract high-frequency term from the seed
+    - id: high_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the high-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "high" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract low-frequency term from the seed
+    - id: low_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the low-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "low" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract category from the seed
+    - id: category
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the category from the JSON. Return ONLY the category, nothing else.
+        - role: USER
+          content: |
+            Extract the "category" value from: {synonym_pair_seed.description}
+            Return ONLY the category.
+
+    # Generate shared definition
+    - id: shared_meaning
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a medical lexicographer. Provide a concise, accurate definition.
+        - role: USER
+          content: |
+            Write a 10-20 word definition for the medical term pair:
+            - Common term: {high_freq_ngram}
+            - Technical term: {low_freq_ngram}
+
+            The definition must apply equally to BOTH terms.
+            Return ONLY the definition.
+
+    # Generate a simple sentence template with a placeholder
+    - id: sentence_template
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a medical writer. Create a simple sentence with a placeholder for the medical term.
+
+            RULES:
+            1. Write a natural, simple sentence (10-15 words)
+            2. Use [TERM] as a placeholder where the medical term should go
+            3. The sentence should work equally well with either the common or technical term
+            4. Keep the sentence structure simple so substitution is seamless
+            5. Do NOT include both terms - just use [TERM] once
+        - role: USER
+          content: |
+            Create a simple medical sentence template using [TERM] as placeholder.
+            The term being described: {high_freq_ngram} (also known as {low_freq_ngram})
+
+            Examples of good templates:
+            - "The patient was diagnosed with [TERM] after the examination."
+            - "The doctor treated the [TERM] with appropriate medication."
+            - "Symptoms of [TERM] include pain and discomfort."
+
+            Return ONLY the sentence template with [TERM] placeholder.
+
+    # Generate the common sentence by substitution
+    - id: example_sentence_common
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{high_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+    # Generate the technical sentence by substitution
+    - id: example_sentence_technical
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{low_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+  # Transform into final structured format
+  transformed_attributes:
+    - id: final_output
+      transformation_strategy:
+        type: CHAT
+        chat_transform:
+          messages:
+            - role: USER
+              content: |
+                Create a JSON object:
+
+                {{
+                  "high_freq_term": "{high_freq_ngram}",
+                  "low_freq_term": "{low_freq_ngram}",
+                  "category": "{category}",
+                  "definition": "{shared_meaning}",
+                  "sentence_template": "{sentence_template}",
+                  "example_common": "{example_sentence_common}",
+                  "example_technical": "{example_sentence_technical}"
+                }}
+
+                Return ONLY the JSON object.
+
+inference_config:
+  model:
+    model_name: claude-sonnet-4-5
+  engine: ANTHROPIC
+  generation:
+    max_new_tokens: 256
+    temperature: 0.3
+  remote_params:
+    num_workers: 100
+    politeness_policy: 60

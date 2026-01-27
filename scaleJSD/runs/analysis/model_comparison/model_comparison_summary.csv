@@ -1,0 +1,11 @@
+Model,Dataset,First Layer JSD,Last Layer JSD,Decay Ratio
+pythia-70m,emotion,0.4957,0.1226,0.247
+pythia-70m,medical,0.4802,0.1308,0.272
+pythia-70m,legal,0.4586,0.0926,0.202
+pythia-70m,scientific,0.4540,0.0631,0.139
+pythia-70m,verb,0.5074,0.0510,0.100
+olmo-1b,emotion,0.3922,0.1217,0.310
+olmo-1b,medical,0.4073,0.1179,0.289
+olmo-1b,legal,0.3783,0.1496,0.395
+olmo-1b,scientific,0.3802,0.2191,0.576
+olmo-1b,verb,0.3875,0.2369,0.611

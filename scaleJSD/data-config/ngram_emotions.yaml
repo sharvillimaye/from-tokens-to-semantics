@@ -1,0 +1,421 @@
+# Emotions/Adjectives N-gram Synonym Dataset Generation
+# Purpose: Generate high-frequency / low-frequency synonym pairs for JSD analysis
+# Strategy: Use curated synonym pairs to ensure diversity and validity
+strategy: GENERAL
+num_samples: 200
+output_path: ./data/emotion_ngrams.jsonl
+
+strategy_params:
+  sampled_attributes:
+    # Pre-defined verified synonym pairs to ensure diversity and correctness
+    - id: synonym_pair_seed
+      name: Synonym Pair
+      description: A verified high-frequency / low-frequency emotion/adjective synonym pair
+      possible_values:
+        # Positive Emotions
+        - id: happy
+          name: happy / elated
+          description: '{"high": "happy", "low": "elated", "category": "positive_emotions"}'
+        - id: excited
+          name: excited / exhilarated
+          description: '{"high": "excited", "low": "exhilarated", "category": "positive_emotions"}'
+        - id: glad
+          name: glad / gratified
+          description: '{"high": "glad", "low": "gratified", "category": "positive_emotions"}'
+        - id: cheerful
+          name: cheerful / jovial
+          description: '{"high": "cheerful", "low": "jovial", "category": "positive_emotions"}'
+        - id: pleased
+          name: pleased / contented
+          description: '{"high": "pleased", "low": "contented", "category": "positive_emotions"}'
+        - id: thrilled
+          name: thrilled / ecstatic
+          description: '{"high": "thrilled", "low": "ecstatic", "category": "positive_emotions"}'
+        - id: joyful
+          name: joyful / jubilant
+          description: '{"high": "joyful", "low": "jubilant", "category": "positive_emotions"}'
+        - id: hopeful
+          name: hopeful / optimistic
+          description: '{"high": "hopeful", "low": "optimistic", "category": "positive_emotions"}'
+        - id: peaceful
+          name: peaceful / tranquil
+          description: '{"high": "peaceful", "low": "tranquil", "category": "positive_emotions"}'
+        - id: content
+          name: content / serene
+          description: '{"high": "content", "low": "serene", "category": "positive_emotions"}'
+        - id: delighted
+          name: delighted / overjoyed
+          description: '{"high": "delighted", "low": "overjoyed", "category": "positive_emotions"}'
+        - id: relieved
+          name: relieved / reassured
+          description: '{"high": "relieved", "low": "reassured", "category": "positive_emotions"}'
+
+        # Negative Emotions
+        - id: sad
+          name: sad / melancholic
+          description: '{"high": "sad", "low": "melancholic", "category": "negative_emotions"}'
+        - id: angry
+          name: angry / irate
+          description: '{"high": "angry", "low": "irate", "category": "negative_emotions"}'
+        - id: upset
+          name: upset / distraught
+          description: '{"high": "upset", "low": "distraught", "category": "negative_emotions"}'
+        - id: scared
+          name: scared / terrified
+          description: '{"high": "scared", "low": "terrified", "category": "negative_emotions"}'
+        - id: worried
+          name: worried / apprehensive
+          description: '{"high": "worried", "low": "apprehensive", "category": "negative_emotions"}'
+        - id: frustrated
+          name: frustrated / exasperated
+          description: '{"high": "frustrated", "low": "exasperated", "category": "negative_emotions"}'
+        - id: anxious
+          name: anxious / fretful
+          description: '{"high": "anxious", "low": "fretful", "category": "negative_emotions"}'
+        - id: miserable
+          name: miserable / wretched
+          description: '{"high": "miserable", "low": "wretched", "category": "negative_emotions"}'
+        - id: depressed
+          name: depressed / despondent
+          description: '{"high": "depressed", "low": "despondent", "category": "negative_emotions"}'
+        - id: bitter
+          name: bitter / resentful
+          description: '{"high": "bitter", "low": "resentful", "category": "negative_emotions"}'
+        - id: gloomy
+          name: gloomy / morose
+          description: '{"high": "gloomy", "low": "morose", "category": "negative_emotions"}'
+        - id: hopeless
+          name: hopeless / despairing
+          description: '{"high": "hopeless", "low": "despairing", "category": "negative_emotions"}'
+
+        # Personality Traits
+        - id: shy
+          name: shy / diffident
+          description: '{"high": "shy", "low": "diffident", "category": "personality_traits"}'
+        - id: bold
+          name: bold / audacious
+          description: '{"high": "bold", "low": "audacious", "category": "personality_traits"}'
+        - id: kind
+          name: kind / benevolent
+          description: '{"high": "kind", "low": "benevolent", "category": "personality_traits"}'
+        - id: mean
+          name: mean / malevolent
+          description: '{"high": "mean", "low": "malevolent", "category": "personality_traits"}'
+        - id: lazy
+          name: lazy / indolent
+          description: '{"high": "lazy", "low": "indolent", "category": "personality_traits"}'
+        - id: smart
+          name: smart / astute
+          description: '{"high": "smart", "low": "astute", "category": "personality_traits"}'
+        - id: friendly
+          name: friendly / amiable
+          description: '{"high": "friendly", "low": "amiable", "category": "personality_traits"}'
+        - id: stubborn
+          name: stubborn / obstinate
+          description: '{"high": "stubborn", "low": "obstinate", "category": "personality_traits"}'
+        - id: clever
+          name: clever / shrewd
+          description: '{"high": "clever", "low": "shrewd", "category": "personality_traits"}'
+        - id: brave
+          name: brave / valiant
+          description: '{"high": "brave", "low": "valiant", "category": "personality_traits"}'
+        - id: humble
+          name: humble / modest
+          description: '{"high": "humble", "low": "modest", "category": "personality_traits"}'
+        - id: proud
+          name: proud / haughty
+          description: '{"high": "proud", "low": "haughty", "category": "personality_traits"}'
+
+        # Intensity Descriptors
+        - id: very
+          name: very / exceedingly
+          description: '{"high": "very", "low": "exceedingly", "category": "intensity"}'
+        - id: really
+          name: really / remarkably
+          description: '{"high": "really", "low": "remarkably", "category": "intensity"}'
+        - id: slightly
+          name: slightly / marginally
+          description: '{"high": "slightly", "low": "marginally", "category": "intensity"}'
+        - id: extremely
+          name: extremely / extraordinarily
+          description: '{"high": "extremely", "low": "extraordinarily", "category": "intensity"}'
+        - id: barely
+          name: barely / scarcely
+          description: '{"high": "barely", "low": "scarcely", "category": "intensity"}'
+        - id: somewhat
+          name: somewhat / moderately
+          description: '{"high": "somewhat", "low": "moderately", "category": "intensity"}'
+        - id: totally
+          name: totally / utterly
+          description: '{"high": "totally", "low": "utterly", "category": "intensity"}'
+        - id: almost
+          name: almost / nearly
+          description: '{"high": "almost", "low": "nearly", "category": "intensity"}'
+        - id: quite
+          name: quite / considerably
+          description: '{"high": "quite", "low": "considerably", "category": "intensity"}'
+        - id: fairly
+          name: fairly / reasonably
+          description: '{"high": "fairly", "low": "reasonably", "category": "intensity"}'
+
+        # Social Emotions
+        - id: embarrassed
+          name: embarrassed / mortified
+          description: '{"high": "embarrassed", "low": "mortified", "category": "social_emotions"}'
+        - id: jealous
+          name: jealous / envious
+          description: '{"high": "jealous", "low": "envious", "category": "social_emotions"}'
+        - id: grateful
+          name: grateful / appreciative
+          description: '{"high": "grateful", "low": "appreciative", "category": "social_emotions"}'
+        - id: lonely
+          name: lonely / forlorn
+          description: '{"high": "lonely", "low": "forlorn", "category": "social_emotions"}'
+        - id: ashamed
+          name: ashamed / abashed
+          description: '{"high": "ashamed", "low": "abashed", "category": "social_emotions"}'
+        - id: guilty
+          name: guilty / remorseful
+          description: '{"high": "guilty", "low": "remorseful", "category": "social_emotions"}'
+        - id: offended
+          name: offended / affronted
+          description: '{"high": "offended", "low": "affronted", "category": "social_emotions"}'
+        - id: sympathetic
+          name: sympathetic / compassionate
+          description: '{"high": "sympathetic", "low": "compassionate", "category": "social_emotions"}'
+        - id: awkward
+          name: awkward / discomfited
+          description: '{"high": "awkward", "low": "discomfited", "category": "social_emotions"}'
+        - id: rejected
+          name: rejected / spurned
+          description: '{"high": "rejected", "low": "spurned", "category": "social_emotions"}'
+
+        # Physical States
+        - id: tired
+          name: tired / fatigued
+          description: '{"high": "tired", "low": "fatigued", "category": "physical_states"}'
+        - id: hungry
+          name: hungry / famished
+          description: '{"high": "hungry", "low": "famished", "category": "physical_states"}'
+        - id: sick
+          name: sick / ailing
+          description: '{"high": "sick", "low": "ailing", "category": "physical_states"}'
+        - id: healthy
+          name: healthy / robust
+          description: '{"high": "healthy", "low": "robust", "category": "physical_states"}'
+        - id: strong
+          name: strong / vigorous
+          description: '{"high": "strong", "low": "vigorous", "category": "physical_states"}'
+        - id: weak
+          name: weak / feeble
+          description: '{"high": "weak", "low": "feeble", "category": "physical_states"}'
+        - id: sleepy
+          name: sleepy / drowsy
+          description: '{"high": "sleepy", "low": "drowsy", "category": "physical_states"}'
+        - id: thirsty
+          name: thirsty / parched
+          description: '{"high": "thirsty", "low": "parched", "category": "physical_states"}'
+        - id: exhausted
+          name: exhausted / depleted
+          description: '{"high": "exhausted", "low": "depleted", "category": "physical_states"}'
+        - id: energetic
+          name: energetic / vivacious
+          description: '{"high": "energetic", "low": "vivacious", "category": "physical_states"}'
+
+        # Cognitive States
+        - id: confused
+          name: confused / bewildered
+          description: '{"high": "confused", "low": "bewildered", "category": "cognitive_states"}'
+        - id: curious
+          name: curious / inquisitive
+          description: '{"high": "curious", "low": "inquisitive", "category": "cognitive_states"}'
+        - id: certain
+          name: certain / convinced
+          description: '{"high": "certain", "low": "convinced", "category": "cognitive_states"}'
+        - id: doubtful
+          name: doubtful / skeptical
+          description: '{"high": "doubtful", "low": "skeptical", "category": "cognitive_states"}'
+        - id: focused
+          name: focused / concentrated
+          description: '{"high": "focused", "low": "concentrated", "category": "cognitive_states"}'
+        - id: distracted
+          name: distracted / preoccupied
+          description: '{"high": "distracted", "low": "preoccupied", "category": "cognitive_states"}'
+        - id: bored
+          name: bored / listless
+          description: '{"high": "bored", "low": "listless", "category": "cognitive_states"}'
+        - id: interested
+          name: interested / intrigued
+          description: '{"high": "interested", "low": "intrigued", "category": "cognitive_states"}'
+        - id: amazed
+          name: amazed / astonished
+          description: '{"high": "amazed", "low": "astonished", "category": "cognitive_states"}'
+        - id: puzzled
+          name: puzzled / perplexed
+          description: '{"high": "puzzled", "low": "perplexed", "category": "cognitive_states"}'
+
+        # Evaluative Adjectives
+        - id: good
+          name: good / excellent
+          description: '{"high": "good", "low": "excellent", "category": "evaluative"}'
+        - id: bad
+          name: bad / dreadful
+          description: '{"high": "bad", "low": "dreadful", "category": "evaluative"}'
+        - id: nice
+          name: nice / pleasant
+          description: '{"high": "nice", "low": "pleasant", "category": "evaluative"}'
+        - id: awful
+          name: awful / abysmal
+          description: '{"high": "awful", "low": "abysmal", "category": "evaluative"}'
+        - id: great
+          name: great / superb
+          description: '{"high": "great", "low": "superb", "category": "evaluative"}'
+        - id: terrible
+          name: terrible / atrocious
+          description: '{"high": "terrible", "low": "atrocious", "category": "evaluative"}'
+        - id: wonderful
+          name: wonderful / magnificent
+          description: '{"high": "wonderful", "low": "magnificent", "category": "evaluative"}'
+        - id: horrible
+          name: horrible / ghastly
+          description: '{"high": "horrible", "low": "ghastly", "category": "evaluative"}'
+        - id: perfect
+          name: perfect / flawless
+          description: '{"high": "perfect", "low": "flawless", "category": "evaluative"}'
+        - id: ugly
+          name: ugly / hideous
+          description: '{"high": "ugly", "low": "hideous", "category": "evaluative"}'
+
+  generated_attributes:
+    # Extract high-frequency term from the seed
+    - id: high_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the high-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "high" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract low-frequency term from the seed
+    - id: low_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the low-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "low" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract category from the seed
+    - id: category
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the category from the JSON. Return ONLY the category, nothing else.
+        - role: USER
+          content: |
+            Extract the "category" value from: {synonym_pair_seed.description}
+            Return ONLY the category.
+
+    # Generate shared definition
+    - id: shared_meaning
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a lexicographer. Provide a concise, accurate definition.
+        - role: USER
+          content: |
+            Write a 10-20 word definition for the adjective/emotion pair:
+            - Common word: {high_freq_ngram}
+            - Literary word: {low_freq_ngram}
+
+            The definition must apply equally to BOTH words.
+            Return ONLY the definition.
+
+    # Generate a simple sentence template with a placeholder
+    - id: sentence_template
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a writer. Create a simple sentence with a placeholder for the adjective/emotion word.
+
+            RULES:
+            1. Write a natural, simple sentence (10-15 words)
+            2. Use [TERM] as a placeholder where the word should go
+            3. The sentence should work equally well with either the common or literary word
+            4. Keep the sentence structure simple so substitution is seamless
+            5. Do NOT include both words - just use [TERM] once
+        - role: USER
+          content: |
+            Create a simple sentence template using [TERM] as placeholder.
+            The word being described: {high_freq_ngram} (also known as {low_freq_ngram})
+
+            Examples of good templates:
+            - "She felt [TERM] after receiving the unexpected news from her family."
+            - "The child looked [TERM] when asked about the broken vase."
+            - "His [TERM] expression revealed his true feelings about the situation."
+
+            Return ONLY the sentence template with [TERM] placeholder.
+
+    # Generate the common sentence by substitution
+    - id: example_sentence_common
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{high_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+    # Generate the technical sentence by substitution
+    - id: example_sentence_technical
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{low_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+  # Transform into final structured format
+  transformed_attributes:
+    - id: final_output
+      transformation_strategy:
+        type: CHAT
+        chat_transform:
+          messages:
+            - role: USER
+              content: |
+                Create a JSON object:
+
+                {{
+                  "high_freq_term": "{high_freq_ngram}",
+                  "low_freq_term": "{low_freq_ngram}",
+                  "category": "{category}",
+                  "definition": "{shared_meaning}",
+                  "sentence_template": "{sentence_template}",
+                  "example_common": "{example_sentence_common}",
+                  "example_technical": "{example_sentence_technical}"
+                }}
+
+                Return ONLY the JSON object.
+
+inference_config:
+  model:
+    model_name: claude-sonnet-4-5
+  engine: ANTHROPIC
+  generation:
+    max_new_tokens: 256
+    temperature: 0.3
+  remote_params:
+    num_workers: 50
+    politeness_policy: 60

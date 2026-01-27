@@ -1,0 +1,433 @@
+# Scientific N-gram Synonym Dataset Generation
+# Purpose: Generate high-frequency / low-frequency synonym pairs for JSD analysis
+# Strategy: Use curated synonym pairs to ensure diversity and validity
+strategy: GENERAL
+num_samples: 200
+output_path: ./data/scientific_ngrams.jsonl
+
+strategy_params:
+  sampled_attributes:
+    # Pre-defined verified synonym pairs to ensure diversity and correctness
+    - id: synonym_pair_seed
+      name: Synonym Pair
+      description: A verified high-frequency / low-frequency scientific synonym pair
+      possible_values:
+        # Biology Terms
+        - id: animal
+          name: animal / fauna
+          description: '{"high": "animal", "low": "fauna", "category": "biology"}'
+        - id: plant
+          name: plant / flora
+          description: '{"high": "plant", "low": "flora", "category": "biology"}'
+        - id: cell
+          name: cell / cellular unit
+          description: '{"high": "cell", "low": "cellular unit", "category": "biology"}'
+        - id: gene
+          name: gene / genetic locus
+          description: '{"high": "gene", "low": "genetic locus", "category": "biology"}'
+        - id: species
+          name: species / taxon
+          description: '{"high": "species", "low": "taxon", "category": "biology"}'
+        - id: evolution
+          name: evolution / phylogenesis
+          description: '{"high": "evolution", "low": "phylogenesis", "category": "biology"}'
+        - id: bacteria
+          name: bacteria / microorganisms
+          description: '{"high": "bacteria", "low": "microorganisms", "category": "biology"}'
+        - id: virus
+          name: virus / pathogen
+          description: '{"high": "virus", "low": "pathogen", "category": "biology"}'
+        - id: cell_division
+          name: cell division / mitosis
+          description: '{"high": "cell division", "low": "mitosis", "category": "biology"}'
+        - id: breeding
+          name: breeding / reproduction
+          description: '{"high": "breeding", "low": "reproduction", "category": "biology"}'
+        - id: dna
+          name: DNA / deoxyribonucleic acid
+          description: '{"high": "DNA", "low": "deoxyribonucleic acid", "category": "biology"}'
+        - id: protein
+          name: protein / polypeptide
+          description: '{"high": "protein", "low": "polypeptide", "category": "biology"}'
+
+        # Chemistry Terms
+        - id: burning
+          name: burning / combustion
+          description: '{"high": "burning", "low": "combustion", "category": "chemistry"}'
+        - id: rust
+          name: rust / oxidation
+          description: '{"high": "rust", "low": "oxidation", "category": "chemistry"}'
+        - id: acid
+          name: acid / corrosive compound
+          description: '{"high": "acid", "low": "corrosive compound", "category": "chemistry"}'
+        - id: chemical
+          name: chemical / compound
+          description: '{"high": "chemical", "low": "compound", "category": "chemistry"}'
+        - id: reaction
+          name: reaction / chemical transformation
+          description: '{"high": "reaction", "low": "chemical transformation", "category": "chemistry"}'
+        - id: mixture
+          name: mixture / solution
+          description: '{"high": "mixture", "low": "solution", "category": "chemistry"}'
+        - id: dissolving
+          name: dissolving / dissolution
+          description: '{"high": "dissolving", "low": "dissolution", "category": "chemistry"}'
+        - id: evaporation
+          name: evaporation / vaporization
+          description: '{"high": "evaporation", "low": "vaporization", "category": "chemistry"}'
+        - id: freezing
+          name: freezing / solidification
+          description: '{"high": "freezing", "low": "solidification", "category": "chemistry"}'
+        - id: melting
+          name: melting / liquefaction
+          description: '{"high": "melting", "low": "liquefaction", "category": "chemistry"}'
+        - id: salt
+          name: salt / sodium chloride
+          description: '{"high": "salt", "low": "sodium chloride", "category": "chemistry"}'
+        - id: water
+          name: water / H2O
+          description: '{"high": "water", "low": "H2O", "category": "chemistry"}'
+
+        # Physics Terms
+        - id: speed
+          name: speed / velocity
+          description: '{"high": "speed", "low": "velocity", "category": "physics"}'
+        - id: force
+          name: force / mechanical force
+          description: '{"high": "force", "low": "mechanical force", "category": "physics"}'
+        - id: energy
+          name: energy / kinetic energy
+          description: '{"high": "energy", "low": "kinetic energy", "category": "physics"}'
+        - id: gravity
+          name: gravity / gravitational force
+          description: '{"high": "gravity", "low": "gravitational force", "category": "physics"}'
+        - id: light
+          name: light / electromagnetic radiation
+          description: '{"high": "light", "low": "electromagnetic radiation", "category": "physics"}'
+        - id: heat
+          name: heat / thermal energy
+          description: '{"high": "heat", "low": "thermal energy", "category": "physics"}'
+        - id: motion
+          name: motion / locomotion
+          description: '{"high": "motion", "low": "locomotion", "category": "physics"}'
+        - id: weight
+          name: weight / gravitational mass
+          description: '{"high": "weight", "low": "gravitational mass", "category": "physics"}'
+        - id: pressure
+          name: pressure / atmospheric pressure
+          description: '{"high": "pressure", "low": "atmospheric pressure", "category": "physics"}'
+        - id: friction
+          name: friction / resistance
+          description: '{"high": "friction", "low": "resistance", "category": "physics"}'
+        - id: sound
+          name: sound / acoustic waves
+          description: '{"high": "sound", "low": "acoustic waves", "category": "physics"}'
+        - id: electricity
+          name: electricity / electrical current
+          description: '{"high": "electricity", "low": "electrical current", "category": "physics"}'
+
+        # Earth Science
+        - id: earthquake
+          name: earthquake / seismic event
+          description: '{"high": "earthquake", "low": "seismic event", "category": "earth_science"}'
+        - id: volcano
+          name: volcano / volcanic vent
+          description: '{"high": "volcano", "low": "volcanic vent", "category": "earth_science"}'
+        - id: weather
+          name: weather / meteorological conditions
+          description: '{"high": "weather", "low": "meteorological conditions", "category": "earth_science"}'
+        - id: climate
+          name: climate / atmospheric conditions
+          description: '{"high": "climate", "low": "atmospheric conditions", "category": "earth_science"}'
+        - id: rock
+          name: rock / geological formation
+          description: '{"high": "rock", "low": "geological formation", "category": "earth_science"}'
+        - id: soil
+          name: soil / sediment
+          description: '{"high": "soil", "low": "sediment", "category": "earth_science"}'
+        - id: fossil
+          name: fossil / paleontological specimen
+          description: '{"high": "fossil", "low": "paleontological specimen", "category": "earth_science"}'
+        - id: erosion
+          name: erosion / weathering
+          description: '{"high": "erosion", "low": "weathering", "category": "earth_science"}'
+        - id: continent
+          name: continent / landmass
+          description: '{"high": "continent", "low": "landmass", "category": "earth_science"}'
+        - id: ocean
+          name: ocean / marine basin
+          description: '{"high": "ocean", "low": "marine basin", "category": "earth_science"}'
+        - id: mountain
+          name: mountain / geological uplift
+          description: '{"high": "mountain", "low": "geological uplift", "category": "earth_science"}'
+        - id: glacier
+          name: glacier / ice mass
+          description: '{"high": "glacier", "low": "ice mass", "category": "earth_science"}'
+
+        # Astronomy
+        - id: star
+          name: star / celestial body
+          description: '{"high": "star", "low": "celestial body", "category": "astronomy"}'
+        - id: planet
+          name: planet / planetary body
+          description: '{"high": "planet", "low": "planetary body", "category": "astronomy"}'
+        - id: moon
+          name: moon / natural satellite
+          description: '{"high": "moon", "low": "natural satellite", "category": "astronomy"}'
+        - id: sun
+          name: sun / solar body
+          description: '{"high": "sun", "low": "solar body", "category": "astronomy"}'
+        - id: space
+          name: space / cosmos
+          description: '{"high": "space", "low": "cosmos", "category": "astronomy"}'
+        - id: galaxy
+          name: galaxy / stellar system
+          description: '{"high": "galaxy", "low": "stellar system", "category": "astronomy"}'
+        - id: comet
+          name: comet / celestial object
+          description: '{"high": "comet", "low": "celestial object", "category": "astronomy"}'
+        - id: orbit
+          name: orbit / orbital path
+          description: '{"high": "orbit", "low": "orbital path", "category": "astronomy"}'
+        - id: asteroid
+          name: asteroid / minor planet
+          description: '{"high": "asteroid", "low": "minor planet", "category": "astronomy"}'
+        - id: black_hole
+          name: black hole / singularity
+          description: '{"high": "black hole", "low": "singularity", "category": "astronomy"}'
+        - id: meteor
+          name: meteor / meteoroid
+          description: '{"high": "meteor", "low": "meteoroid", "category": "astronomy"}'
+        - id: nebula
+          name: nebula / interstellar cloud
+          description: '{"high": "nebula", "low": "interstellar cloud", "category": "astronomy"}'
+
+        # Ecology
+        - id: environment
+          name: environment / ecosystem
+          description: '{"high": "environment", "low": "ecosystem", "category": "ecology"}'
+        - id: habitat
+          name: habitat / ecological niche
+          description: '{"high": "habitat", "low": "ecological niche", "category": "ecology"}'
+        - id: food_chain
+          name: food chain / trophic cascade
+          description: '{"high": "food chain", "low": "trophic cascade", "category": "ecology"}'
+        - id: pollution
+          name: pollution / contamination
+          description: '{"high": "pollution", "low": "contamination", "category": "ecology"}'
+        - id: extinction
+          name: extinction / species loss
+          description: '{"high": "extinction", "low": "species loss", "category": "ecology"}'
+        - id: predator
+          name: predator / carnivore
+          description: '{"high": "predator", "low": "carnivore", "category": "ecology"}'
+        - id: prey
+          name: prey / quarry
+          description: '{"high": "prey", "low": "quarry", "category": "ecology"}'
+        - id: biodiversity
+          name: biodiversity / biological diversity
+          description: '{"high": "biodiversity", "low": "biological diversity", "category": "ecology"}'
+        - id: conservation
+          name: conservation / preservation
+          description: '{"high": "conservation", "low": "preservation", "category": "ecology"}'
+        - id: deforestation
+          name: deforestation / forest clearance
+          description: '{"high": "deforestation", "low": "forest clearance", "category": "ecology"}'
+
+        # Anatomy and Physiology
+        - id: breathing
+          name: breathing / respiration
+          description: '{"high": "breathing", "low": "respiration", "category": "anatomy"}'
+        - id: digestion
+          name: digestion / metabolism
+          description: '{"high": "digestion", "low": "metabolism", "category": "anatomy"}'
+        - id: heartbeat
+          name: heartbeat / cardiac rhythm
+          description: '{"high": "heartbeat", "low": "cardiac rhythm", "category": "anatomy"}'
+        - id: muscle
+          name: muscle / muscular tissue
+          description: '{"high": "muscle", "low": "muscular tissue", "category": "anatomy"}'
+        - id: bone
+          name: bone / skeletal structure
+          description: '{"high": "bone", "low": "skeletal structure", "category": "anatomy"}'
+        - id: nerve
+          name: nerve / neural pathway
+          description: '{"high": "nerve", "low": "neural pathway", "category": "anatomy"}'
+        - id: blood
+          name: blood / circulatory fluid
+          description: '{"high": "blood", "low": "circulatory fluid", "category": "anatomy"}'
+        - id: brain
+          name: brain / cerebrum
+          description: '{"high": "brain", "low": "cerebrum", "category": "anatomy"}'
+        - id: skin
+          name: skin / epidermis
+          description: '{"high": "skin", "low": "epidermis", "category": "anatomy"}'
+        - id: lung
+          name: lung / pulmonary organ
+          description: '{"high": "lung", "low": "pulmonary organ", "category": "anatomy"}'
+
+        # Natural Phenomena
+        - id: lightning
+          name: lightning / electrical discharge
+          description: '{"high": "lightning", "low": "electrical discharge", "category": "phenomena"}'
+        - id: thunder
+          name: thunder / sonic boom
+          description: '{"high": "thunder", "low": "sonic boom", "category": "phenomena"}'
+        - id: rainbow
+          name: rainbow / spectral arc
+          description: '{"high": "rainbow", "low": "spectral arc", "category": "phenomena"}'
+        - id: tide
+          name: tide / tidal movement
+          description: '{"high": "tide", "low": "tidal movement", "category": "phenomena"}'
+        - id: aurora
+          name: aurora / polar lights
+          description: '{"high": "aurora", "low": "polar lights", "category": "phenomena"}'
+        - id: eclipse
+          name: eclipse / celestial occultation
+          description: '{"high": "eclipse", "low": "celestial occultation", "category": "phenomena"}'
+        - id: tornado
+          name: tornado / cyclonic vortex
+          description: '{"high": "tornado", "low": "cyclonic vortex", "category": "phenomena"}'
+        - id: hurricane
+          name: hurricane / tropical cyclone
+          description: '{"high": "hurricane", "low": "tropical cyclone", "category": "phenomena"}'
+        - id: flood
+          name: flood / inundation
+          description: '{"high": "flood", "low": "inundation", "category": "phenomena"}'
+        - id: drought
+          name: drought / aridity
+          description: '{"high": "drought", "low": "aridity", "category": "phenomena"}'
+
+  generated_attributes:
+    # Extract high-frequency term from the seed
+    - id: high_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the high-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "high" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract low-frequency term from the seed
+    - id: low_freq_ngram
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the low-frequency term from the JSON. Return ONLY the term, nothing else.
+        - role: USER
+          content: |
+            Extract the "low" value from: {synonym_pair_seed.description}
+            Return ONLY the term.
+
+    # Extract category from the seed
+    - id: category
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Extract the category from the JSON. Return ONLY the category, nothing else.
+        - role: USER
+          content: |
+            Extract the "category" value from: {synonym_pair_seed.description}
+            Return ONLY the category.
+
+    # Generate shared definition
+    - id: shared_meaning
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a scientific lexicographer. Provide a concise, accurate definition.
+        - role: USER
+          content: |
+            Write a 10-20 word definition for the scientific term pair:
+            - Common term: {high_freq_ngram}
+            - Technical term: {low_freq_ngram}
+
+            The definition must apply equally to BOTH terms.
+            Return ONLY the definition.
+
+    # Generate a simple sentence template with a placeholder
+    - id: sentence_template
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            You are a science writer. Create a simple sentence with a placeholder for the scientific term.
+
+            RULES:
+            1. Write a natural, simple sentence (10-15 words)
+            2. Use [TERM] as a placeholder where the scientific term should go
+            3. The sentence should work equally well with either the common or technical term
+            4. Keep the sentence structure simple so substitution is seamless
+            5. Do NOT include both terms - just use [TERM] once
+        - role: USER
+          content: |
+            Create a simple scientific sentence template using [TERM] as placeholder.
+            The term being described: {high_freq_ngram} (also known as {low_freq_ngram})
+
+            Examples of good templates:
+            - "The scientist studied the [TERM] under controlled laboratory conditions."
+            - "Changes in [TERM] can significantly affect the surrounding environment."
+            - "The textbook explained how [TERM] plays a crucial role in nature."
+
+            Return ONLY the sentence template with [TERM] placeholder.
+
+    # Generate the common sentence by substitution
+    - id: example_sentence_common
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{high_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+    # Generate the technical sentence by substitution
+    - id: example_sentence_technical
+      instruction_messages:
+        - role: SYSTEM
+          content: |
+            Replace [TERM] with the specified word. Return ONLY the completed sentence.
+        - role: USER
+          content: |
+            Replace [TERM] with "{low_freq_ngram}" in this sentence:
+            {sentence_template}
+
+            Return ONLY the completed sentence.
+
+  # Transform into final structured format
+  transformed_attributes:
+    - id: final_output
+      transformation_strategy:
+        type: CHAT
+        chat_transform:
+          messages:
+            - role: USER
+              content: |
+                Create a JSON object:
+
+                {{
+                  "high_freq_term": "{high_freq_ngram}",
+                  "low_freq_term": "{low_freq_ngram}",
+                  "category": "{category}",
+                  "definition": "{shared_meaning}",
+                  "sentence_template": "{sentence_template}",
+                  "example_common": "{example_sentence_common}",
+                  "example_technical": "{example_sentence_technical}"
+                }}
+
+                Return ONLY the JSON object.
+
+inference_config:
+  model:
+    model_name: claude-sonnet-4-5
+  engine: ANTHROPIC
+  generation:
+    max_new_tokens: 256
+    temperature: 0.3
+  remote_params:
+    num_workers: 50
+    politeness_policy: 60

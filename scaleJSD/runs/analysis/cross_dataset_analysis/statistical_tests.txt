@@ -1,0 +1,82 @@
+======================================================================
+STATISTICAL RIGOR ANALYSIS
+======================================================================
+
+## 1. Bootstrap 95% CI for Decay Ratio (L5/L0)
+--------------------------------------------------
+Dataset      |     Mean |               95% CI |      Std
+--------------------------------------------------
+emotion      |    0.247 | [0.228, 0.267] |    0.010
+medical      |    0.272 | [0.152, 0.399] |    0.065
+legal        |    0.202 | [0.085, 0.341] |    0.064
+scientific   |    0.139 | [0.071, 0.211] |    0.037
+verb         |    0.100 | [0.042, 0.173] |    0.033
+
+## 2. One-way ANOVA (JSD by Domain)
+--------------------------------------------------
+Layer 0: F=2.055, p=0.0879 
+Layer 1: F=2.380, p=0.0527 
+Layer 2: F=4.865, p=0.0009 ***
+Layer 3: F=5.070, p=0.0006 ***
+Layer 4: F=16.993, p=0.0000 ***
+Layer 5: F=3.748, p=0.0057 **
+
+(*** p<0.001, ** p<0.01, * p<0.05)
+
+## 3. Pairwise Effect Sizes (Cohen's d)
+--------------------------------------------------
+Significant layers: [2, 3, 4, 5]
+
+Layer 2 pairwise Cohen's d:
+  emotion vs medical: d=-0.686 (medium)
+  emotion vs legal: d=-0.434 (small)
+  emotion vs scientific: d=-0.006 (negligible)
+  emotion vs verb: d=-0.530 (medium)
+  medical vs legal: d=+0.180 (negligible)
+  medical vs scientific: d=+0.903 (large)
+  medical vs verb: d=+0.241 (small)
+  legal vs scientific: d=+0.532 (medium)
+  legal vs verb: d=-0.003 (negligible)
+  scientific vs verb: d=-0.664 (medium)
+
+Layer 3 pairwise Cohen's d:
+  emotion vs medical: d=-0.532 (medium)
+  emotion vs legal: d=-0.255 (small)
+  emotion vs scientific: d=-0.729 (medium)
+  emotion vs verb: d=-0.728 (medium)
+  medical vs legal: d=+0.261 (small)
+  medical vs scientific: d=-0.111 (negligible)
+  medical vs verb: d=-0.168 (negligible)
+  legal vs scientific: d=-0.432 (small)
+  legal vs verb: d=-0.448 (small)
+  scientific vs verb: d=-0.085 (negligible)
+
+Layer 4 pairwise Cohen's d:
+  emotion vs medical: d=+0.045 (negligible)
+  emotion vs legal: d=+0.198 (negligible)
+  emotion vs scientific: d=-0.082 (negligible)
+  emotion vs verb: d=-1.402 (large)
+  medical vs legal: d=+0.109 (negligible)
+  medical vs scientific: d=-0.113 (negligible)
+  medical vs verb: d=-1.144 (large)
+  legal vs scientific: d=-0.281 (small)
+  legal vs verb: d=-1.402 (large)
+  scientific vs verb: d=-1.382 (large)
+
+Layer 5 pairwise Cohen's d:
+  emotion vs medical: d=-0.088 (negligible)
+  emotion vs legal: d=+0.324 (small)
+  emotion vs scientific: d=+0.585 (medium)
+  emotion vs verb: d=+0.822 (large)
+  medical vs legal: d=+0.249 (small)
+  medical vs scientific: d=+0.481 (small)
+  medical vs verb: d=+0.596 (medium)
+  legal vs scientific: d=+0.214 (small)
+  legal vs verb: d=+0.318 (small)
+  scientific vs verb: d=+0.095 (negligible)
+
+## 4. Summary
+--------------------------------------------------
+- All decay ratios are significantly < 1.0 (CI upper bounds < 1)
+  --> JSD decay is a robust phenomenon across all domains
+- 4/6 layers show significant domain differences
