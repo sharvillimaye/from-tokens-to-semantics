@@ -1,0 +1,99 @@
+# Polytope Density — All models, all datasets
+# Runs 6 models x 5 datasets = 30 combinations sequentially.
+# Each model needs 1 GPU (inference only, fp16). Largest model (Llama 8B) uses ~16GB.
+# Small models run first (fast), then large models.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ani-polytope-density-all
+  namespace: oumi-science
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker-gpu-8x-h100-sxm5gdr-zjdfj-5pk5t
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      restartPolicy: Never
+      containers:
+      - name: runner
+        image: ghcr.io/oumi-ai/oumi:latest
+        securityContext:
+          runAsUser: 0
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -e
+
+          # --- Setup ---
+          cd /data/ani/mechinterp/code
+          git fetch origin && git checkout polytope-results && git pull origin polytope-results || true
+          pip install nnsight loguru 2>/dev/null
+
+          # HF token for gated models (Llama). Set via k8s secret or env var.
+          export HF_TOKEN="${HF_TOKEN:-}"
+          if [ -f /data/ani/.hf_token ]; then
+            export HF_TOKEN=$(cat /data/ani/.hf_token)
+          fi
+
+          OUTPUT_ROOT=/data/ani/mechinterp/runs/polytope_density
+
+          # --- List all combos ---
+          echo "=== Planned runs ==="
+          python3 -m polytope.run_all_polytope \
+            --code-dir /data/ani/mechinterp/code \
+            --output-root $OUTPUT_ROOT \
+            --list
+
+          # --- Run small models first (fast) ---
+          for MODEL in pythia-70m pythia-1b olmo-1b; do
+            echo ""
+            echo "=========================================================="
+            echo "  MODEL: $MODEL — $(date)"
+            echo "=========================================================="
+            python3 -m polytope.run_all_polytope \
+              --code-dir /data/ani/mechinterp/code \
+              --output-root $OUTPUT_ROOT \
+              --model $MODEL
+          done
+
+          # --- Run large models ---
+          for MODEL in pythia-6.9b olmo-7b llama-8b; do
+            echo ""
+            echo "=========================================================="
+            echo "  MODEL: $MODEL — $(date)"
+            echo "=========================================================="
+            python3 -m polytope.run_all_polytope \
+              --code-dir /data/ani/mechinterp/code \
+              --output-root $OUTPUT_ROOT \
+              --model $MODEL
+          done
+
+          echo ""
+          echo "=========================================================="
+          echo "  ALL DONE — $(date)"
+          echo "=========================================================="
+          ls -la $OUTPUT_ROOT/*/
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+            cpu: "8"
+            memory: "64Gi"
+            ephemeral-storage: "10Gi"
+          limits:
+            nvidia.com/gpu: 1
+            cpu: "16"
+            memory: "128Gi"
+            ephemeral-storage: "40Gi"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+          readOnly: false
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: pvc-oumi-science
