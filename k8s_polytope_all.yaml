@@ -31,7 +31,10 @@ spec:
 
           # --- Setup ---
           cd /data/ani/mechinterp/code
-          git fetch origin && git checkout polytope-results && git pull origin polytope-results || true
+          git fetch origin
+          git stash || true
+          git checkout polytope-results
+          git pull origin polytope-results
           pip install nnsight loguru 2>/dev/null
 
           # HF token for gated models (Llama). Set via k8s secret or env var.
