@@ -30,12 +30,20 @@ spec:
           set -e
 
           # --- Setup ---
-          cd /data/ani/mechinterp/code
-          git fetch origin
-          git stash || true
-          git checkout polytope-results
-          git pull origin polytope-results
+          # Clone fresh copy of the polytope-results branch alongside existing code
+          REPO_DIR=/data/ani/mechinterp/polytope-code
+          if [ -d "$REPO_DIR/.git" ]; then
+            cd $REPO_DIR && git fetch origin && git checkout polytope-results && git pull origin polytope-results
+          else
+            rm -rf $REPO_DIR
+            git clone --branch polytope-results --single-branch \
+              https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
+          fi
+          cd $REPO_DIR
           pip install nnsight loguru 2>/dev/null
+
+          # Symlink datasets from the existing code directory
+          ln -sfn /data/ani/mechinterp/code/scaleJSD $REPO_DIR/scaleJSD 2>/dev/null || true
 
           # HF token for gated models (Llama). Set via k8s secret or env var.
           export HF_TOKEN="${HF_TOKEN:-}"
@@ -48,7 +56,7 @@ spec:
           # --- List all combos ---
           echo "=== Planned runs ==="
           python3 -m polytope.run_all_polytope \
-            --code-dir /data/ani/mechinterp/code \
+            --code-dir $REPO_DIR \
             --output-root $OUTPUT_ROOT \
             --list
 
@@ -59,7 +67,7 @@ spec:
             echo "  MODEL: $MODEL — $(date)"
             echo "=========================================================="
             python3 -m polytope.run_all_polytope \
-              --code-dir /data/ani/mechinterp/code \
+              --code-dir $REPO_DIR \
               --output-root $OUTPUT_ROOT \
               --model $MODEL
           done
@@ -71,7 +79,7 @@ spec:
             echo "  MODEL: $MODEL — $(date)"
             echo "=========================================================="
             python3 -m polytope.run_all_polytope \
-              --code-dir /data/ani/mechinterp/code \
+              --code-dir $REPO_DIR \
               --output-root $OUTPUT_ROOT \
               --model $MODEL
           done
