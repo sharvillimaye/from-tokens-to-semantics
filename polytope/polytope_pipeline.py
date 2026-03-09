@@ -119,6 +119,85 @@ def pairs_to_samples(pairs: List[Dict[str, Any]], tokenizer) -> List[Dict[str, A
 # Step 2: Extract activations
 # ---------------------------------------------------------------------------
 
+class _HookCapture:
+    """Captures MLP input, pre-activation, and layer output using PyTorch hooks."""
+
+    def __init__(self, model, layers: List[int]):
+        self.model = model
+        self.layers = layers
+        self.hooks = []
+        self.mlp_input: Dict[int, torch.Tensor] = {}
+        self.pre_act: Dict[int, torch.Tensor] = {}
+        self.post_act: Dict[int, torch.Tensor] = {}
+
+    def _find_model_layers(self):
+        """Auto-detect the transformer layer list."""
+        for attr in ["gpt_neox.layers", "model.layers", "transformer.h",
+                      "transformer.layers", "model.decoder.layers"]:
+            obj = self.model
+            try:
+                for part in attr.split("."):
+                    obj = getattr(obj, part)
+                return obj
+            except AttributeError:
+                continue
+        raise RuntimeError("Cannot find transformer layers in model")
+
+    def _find_mlp_and_upproj(self, layer_module):
+        """Find MLP module and its up-projection submodule."""
+        mlp_names = ["mlp", "feed_forward", "ff"]
+        up_proj_names = ["dense_h_to_4h", "up_proj", "c_fc", "fc1", "gate_proj", "w1"]
+
+        for mn in mlp_names:
+            mlp = getattr(layer_module, mn, None)
+            if mlp is None:
+                continue
+            for un in up_proj_names:
+                up = getattr(mlp, un, None)
+                if up is not None:
+                    return mlp, up
+        return None, None
+
+    def register(self):
+        model_layers = self._find_model_layers()
+        for L in self.layers:
+            layer_mod = model_layers[L]
+            mlp_mod, up_mod = self._find_mlp_and_upproj(layer_mod)
+
+            # Layer output (post-activation + residual)
+            self.hooks.append(layer_mod.register_forward_hook(
+                lambda mod, inp, out, _L=L: self.post_act.__setitem__(
+                    _L, (out[0] if isinstance(out, tuple) else out).detach().cpu()
+                )
+            ))
+
+            # MLP input (residual stream entering MLP)
+            if mlp_mod is not None:
+                self.hooks.append(mlp_mod.register_forward_hook(
+                    lambda mod, inp, out, _L=L: self.mlp_input.__setitem__(
+                        _L, inp[0].detach().cpu() if isinstance(inp, tuple) else inp.detach().cpu()
+                    )
+                ))
+
+            # Up-projection output (pre-activation, for spline codes)
+            if up_mod is not None:
+                self.hooks.append(up_mod.register_forward_hook(
+                    lambda mod, inp, out, _L=L: self.pre_act.__setitem__(
+                        _L, (out[0] if isinstance(out, tuple) else out).detach().cpu()
+                    )
+                ))
+
+    def clear(self):
+        self.mlp_input.clear()
+        self.pre_act.clear()
+        self.post_act.clear()
+
+    def remove(self):
+        for h in self.hooks:
+            h.remove()
+        self.hooks.clear()
+
+
 def extract_all_activations(
     samples: List[Dict[str, Any]],
     model_id: str,
@@ -128,25 +207,31 @@ def extract_all_activations(
 ) -> List[Dict[str, Any]]:
     """Extract activations for all samples across all layers.
 
-    Uses nnsight for hook-based extraction.  Returns flat list of activation records.
+    Uses direct PyTorch hooks (not nnsight) for reliable extraction.
+    Returns flat list of activation records.
     """
-    from nnsight import LanguageModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    import os
 
     print(f"Loading model {model_id} @ {revision} on {device} ...")
-    kwargs = {"device_map": device}
-    # Some models (e.g. Llama) require a HuggingFace token
-    import os
+    load_kwargs = {"torch_dtype": torch.float16}
     hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     if hf_token:
-        kwargs["token"] = hf_token
-    model = LanguageModel(model_id, revision=revision, **kwargs)
-    model.eval()
+        load_kwargs["token"] = hf_token
+    if revision != "main":
+        load_kwargs["revision"] = revision
 
-    from polytope.checkpoint_analysis import (
-        extract_layer_activations,
-        create_activation_record,
-        _detect_activation_function,
+    model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs).to(device)
+    model.eval()
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, **({"revision": revision} if revision != "main" else {}),
+        **({"token": hf_token} if hf_token else {}),
     )
+
+    capture = _HookCapture(model, target_layers)
+    capture.register()
+
+    from polytope.checkpoint_analysis import create_activation_record
 
     all_records = []
     for idx, sample in enumerate(samples):
@@ -156,12 +241,26 @@ def extract_all_activations(
         token_ids = sample["token_ids_sentence"]
         position = sample["activation_target_idx"]
 
+        capture.clear()
+        with torch.no_grad():
+            inputs = torch.tensor([token_ids], device=device)
+            _ = model(input_ids=inputs)
+
         for layer in target_layers:
             try:
-                activation_type = _detect_activation_function(model, layer)
-                post_act, pre_act, mlp_input = extract_layer_activations(
-                    model, token_ids, layer, position, strategy="single"
-                )
+                post_t = capture.post_act.get(layer)
+                pre_t = capture.pre_act.get(layer)
+                mlp_in_t = capture.mlp_input.get(layer)
+
+                if post_t is None:
+                    print(f"    WARN: no output for layer {layer}, {sample['phrase']}")
+                    continue
+
+                # Extract at token position
+                pos = min(position, post_t.shape[1] - 1)
+                post_np = post_t[0, pos, :].float().numpy()
+                pre_np = pre_t[0, pos, :].float().numpy() if pre_t is not None else None
+                mlp_in_np = mlp_in_t[0, pos, :].float().numpy() if mlp_in_t is not None else None
 
                 record = create_activation_record(
                     checkpoint_step=revision,
@@ -173,10 +272,10 @@ def extract_all_activations(
                     activation_target_idx=position,
                     phrase_start_idx=sample["phrase_start_idx"],
                     phrase_end_idx=sample["phrase_end_idx"],
-                    activation_vector=post_act,
-                    pre_activation_vector=pre_act,
-                    mlp_input_vector=mlp_input,
-                    activation_type=activation_type,
+                    activation_vector=post_np,
+                    pre_activation_vector=pre_np,
+                    mlp_input_vector=mlp_in_np,
+                    activation_type="gelu",
                     pair_id=sample["pair_id"],
                 )
                 all_records.append(record)
@@ -185,9 +284,9 @@ def extract_all_activations(
                 print(f"    WARN: layer {layer} failed for {sample['phrase']}: {e}")
                 continue
 
+    capture.remove()
     print(f"Extracted {len(all_records)} activation records")
 
-    # Cleanup
     del model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
