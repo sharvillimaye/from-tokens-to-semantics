@@ -1,0 +1,173 @@
+# Coverage & Affinity Experiment — Pythia 70m/6.9b + OLMo 1B/7B, all datasets
+# Tests whether frequency affinity independently predicts JSD after controlling for coverage,
+# using fixed binary coverage metric (no L1 normalization bug).
+# 1 GPU needed (inference only, fp16). Largest model (OLMo-7B) uses ~14GB VRAM.
+# Pythia models: 15 training checkpoints for dynamics. OLMo: main revision only.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ani-coverage-affinity-all
+  namespace: oumi-science
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker-gpu-8x-h100-sxm5gdr-zjdfj-5pk5t
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      restartPolicy: Never
+      containers:
+      - name: runner
+        image: ghcr.io/oumi-ai/oumi:latest
+        securityContext:
+          runAsUser: 0
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -e
+
+          # --- Setup ---
+          REPO_DIR=/data/ani/mechinterp/polytope-code
+          if [ -d "$REPO_DIR/.git" ]; then
+            cd $REPO_DIR && git fetch origin && git checkout polytope-results && git pull origin polytope-results
+          else
+            rm -rf $REPO_DIR
+            git clone --branch polytope-results --single-branch \
+              https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
+          fi
+          cd $REPO_DIR
+
+          pip install transformers scipy pandas numpy torch 2>/dev/null
+
+          # Symlink datasets
+          ln -sfn /data/ani/mechinterp/code/scaleJSD $REPO_DIR/scaleJSD 2>/dev/null || true
+
+          # Also check if datasets are at the legacy/filtered path
+          DATASET_DIR=/data/ani/mechinterp/code/scaleJSD/dataset/legacy/filtered
+          if [ ! -d "$DATASET_DIR" ]; then
+            # Fallback: try without legacy
+            DATASET_DIR=/data/ani/mechinterp/code/scaleJSD/dataset/filtered
+          fi
+
+          OUTPUT_ROOT=/data/ani/mechinterp/runs/coverage_affinity
+          PYTHIA_REVISIONS="step3000,step13000,step23000,step33000,step43000,step53000,step63000,step73000,step83000,step93000,step103000,step113000,step123000,step133000,step143000"
+
+          # Verify datasets exist
+          echo "=== Checking datasets ==="
+          echo "  Dataset dir: ${DATASET_DIR}"
+          for ds in emotion medical legal scientific verb; do
+            if ls ${DATASET_DIR}/${ds}_ngrams_dedup_filtered.jsonl 2>/dev/null; then
+              echo "  Found: ${ds}"
+            else
+              echo "  MISSING: ${ds}"
+            fi
+          done
+
+          # HF token for gated models (if needed)
+          if [ -f /data/ani/.hf_token ]; then
+            export HF_TOKEN=$(cat /data/ani/.hf_token)
+          fi
+
+          # ============================================================
+          # 1. Pythia-70m — 15 checkpoints × 5 datasets (small, fast)
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  MODEL: EleutherAI/pythia-70m-deduped — $(date)"
+          echo "=========================================================="
+          python3 coverage_affinity_experiment.py \
+            --all-datasets \
+            --dataset-dir ${DATASET_DIR} \
+            --model EleutherAI/pythia-70m-deduped \
+            --revisions ${PYTHIA_REVISIONS} \
+            --output-dir ${OUTPUT_ROOT}/pythia-70m \
+            --save-activations \
+            --device cuda
+          echo "  Done: pythia-70m — $(date)"
+
+          # ============================================================
+          # 2. OLMo-1B — main revision × 5 datasets
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  MODEL: allenai/OLMo-1B-hf — $(date)"
+          echo "=========================================================="
+          python3 coverage_affinity_experiment.py \
+            --all-datasets \
+            --dataset-dir ${DATASET_DIR} \
+            --model allenai/OLMo-1B-hf \
+            --revisions main \
+            --output-dir ${OUTPUT_ROOT}/olmo-1b \
+            --save-activations \
+            --device cuda
+          echo "  Done: olmo-1b — $(date)"
+
+          # ============================================================
+          # 3. Pythia-6.9b — 15 checkpoints × 5 datasets (large)
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  MODEL: EleutherAI/pythia-6.9b-deduped — $(date)"
+          echo "=========================================================="
+          python3 coverage_affinity_experiment.py \
+            --all-datasets \
+            --dataset-dir ${DATASET_DIR} \
+            --model EleutherAI/pythia-6.9b-deduped \
+            --revisions ${PYTHIA_REVISIONS} \
+            --output-dir ${OUTPUT_ROOT}/pythia-6.9b \
+            --save-activations \
+            --device cuda
+          echo "  Done: pythia-6.9b — $(date)"
+
+          # ============================================================
+          # 4. OLMo-7B — main revision × 5 datasets
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  MODEL: allenai/OLMo-7B-hf — $(date)"
+          echo "=========================================================="
+          python3 coverage_affinity_experiment.py \
+            --all-datasets \
+            --dataset-dir ${DATASET_DIR} \
+            --model allenai/OLMo-7B-hf \
+            --revisions main \
+            --output-dir ${OUTPUT_ROOT}/olmo-7b \
+            --save-activations \
+            --device cuda
+          echo "  Done: olmo-7b — $(date)"
+
+          # ============================================================
+          # Summary
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  ALL MODELS DONE — $(date)"
+          echo "=========================================================="
+          echo ""
+          echo "=== Results ==="
+          find $OUTPUT_ROOT -name "*.csv" -o -name "*.json" | sort
+          echo ""
+          du -sh $OUTPUT_ROOT/*/
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+            cpu: "8"
+            memory: "64Gi"
+            ephemeral-storage: "20Gi"
+          limits:
+            nvidia.com/gpu: 1
+            cpu: "16"
+            memory: "128Gi"
+            ephemeral-storage: "80Gi"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+          readOnly: false
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: pvc-oumi-science
