@@ -1,0 +1,126 @@
+# Coverage & Affinity Experiment — Pythia-6.9b + OLMo-7B (large models)
+# Runs on qx896 node (empty, 8 free GPUs) with local PVC
+# v4: HF cache on PVC to avoid ephemeral storage eviction from 15 × 14GB checkpoints
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ani-coverage-affinity-large-v4
+  namespace: oumi-science
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker-gpu-8x-h100-sxm5gdr-zjdfj-qx896
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      restartPolicy: Never
+      containers:
+      - name: runner
+        image: ghcr.io/oumi-ai/oumi:latest
+        securityContext:
+          runAsUser: 0
+        env:
+        - name: HF_HOME
+          value: /data/ani/hf_cache
+        - name: TRANSFORMERS_CACHE
+          value: /data/ani/hf_cache/hub
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -e
+
+          # --- Setup ---
+          REPO_DIR=/workspace/polytope-code
+          OUTPUT_ROOT=/data/ani/mechinterp/runs/coverage_affinity
+          mkdir -p $OUTPUT_ROOT /data/ani/hf_cache
+
+          git clone --branch polytope-results --single-branch \
+            https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
+          cd $REPO_DIR
+
+          pip install transformers scipy pandas numpy torch 2>/dev/null
+
+          DATASET_DIR=$REPO_DIR/datasets/filtered
+          PYTHIA_REVISIONS="step3000,step13000,step23000,step33000,step43000,step53000,step63000,step73000,step83000,step93000,step103000,step113000,step123000,step133000,step143000"
+
+          echo "=== Checking datasets ==="
+          ls -la ${DATASET_DIR}/
+          echo ""
+          echo "=== GPU check ==="
+          nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv
+          echo ""
+          echo "=== Memory check ==="
+          free -h
+          echo ""
+
+          # ============================================================
+          # 1. Pythia-6.9b — 15 checkpoints × 5 datasets
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  MODEL: EleutherAI/pythia-6.9b-deduped — $(date)"
+          echo "=========================================================="
+          python3 coverage_affinity_experiment.py \
+            --all-datasets \
+            --dataset-dir ${DATASET_DIR} \
+            --model EleutherAI/pythia-6.9b-deduped \
+            --revisions ${PYTHIA_REVISIONS} \
+            --output-dir ${OUTPUT_ROOT}/pythia-6.9b \
+            --device cuda
+          echo "  Done: pythia-6.9b — $(date)"
+
+          # ============================================================
+          # 2. OLMo-7B — main revision × 5 datasets
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  MODEL: allenai/OLMo-7B-hf — $(date)"
+          echo "=========================================================="
+          python3 coverage_affinity_experiment.py \
+            --all-datasets \
+            --dataset-dir ${DATASET_DIR} \
+            --model allenai/OLMo-7B-hf \
+            --revisions main \
+            --output-dir ${OUTPUT_ROOT}/olmo-7b \
+            --device cuda
+          echo "  Done: olmo-7b — $(date)"
+
+          # ============================================================
+          # Cleanup HF cache to free PVC space
+          # ============================================================
+          echo "Cleaning HF cache..."
+          du -sh /data/ani/hf_cache/ || true
+          rm -rf /data/ani/hf_cache/
+
+          # ============================================================
+          # Summary
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  ALL LARGE MODELS DONE — $(date)"
+          echo "=========================================================="
+          find $OUTPUT_ROOT -name "*.csv" -o -name "*.json" | sort
+          du -sh $OUTPUT_ROOT/*/
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+            cpu: "8"
+            memory: "64Gi"
+            ephemeral-storage: "20Gi"
+          limits:
+            nvidia.com/gpu: 1
+            cpu: "16"
+            memory: "200Gi"
+            ephemeral-storage: "40Gi"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+          readOnly: false
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: pvc-local-qx896
