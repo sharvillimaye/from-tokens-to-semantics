@@ -62,6 +62,11 @@ from scipy.stats import spearmanr, mannwhitneyu, norm
 EPS = 1e-12
 
 
+def _model_torch_dtype(device: str) -> torch.dtype:
+    """Avoid half precision on CPU, where many HF models will fail to run."""
+    return torch.float16 if device in {"cuda", "mps"} else torch.float32
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Activation capture
 # ─────────────────────────────────────────────────────────────────────────────
@@ -335,6 +340,22 @@ def compute_neuron_metrics(
     mass_all = A_relu.sum(axis=0)                          # [D]
     logfreq_affinity = weighted_logf / np.maximum(mass_all, EPS)  # [D]
 
+    # ── Participation coverage (paper's Eq 3-4): L1-normalized firing mass ──
+    # For each phrase p, L1-normalize activations across neurons to get "share":
+    #   share_h(p) = ReLU(a_h(p)) / Σ_h' ReLU(a_h'(p))
+    # Then participation coverage = mean_p(share_h(p))
+    # This is the paper's original metric — conflates breadth and intensity
+    # because L1 normalization creates inter-neuron competition.
+    row_sums = A_relu.sum(axis=1, keepdims=True)  # [N, 1]
+    shares = A_relu / np.maximum(row_sums, EPS)    # [N, D] — L1-normalized
+    participation_coverage = shares.mean(axis=0)    # [D]
+
+    # Also compute per-group participation coverage for affinity under paper's metric
+    shares_high = shares[high_mask]
+    shares_low = shares[low_mask]
+    part_cov_high = shares_high.mean(axis=0)
+    part_cov_low = shares_low.mean(axis=0)
+
     return pd.DataFrame({
         "neuron": np.arange(D),
         "coverage_high": coverage_high,
@@ -345,6 +366,9 @@ def compute_neuron_metrics(
         "raw_mass_total": raw_mass_total,
         "frequency_affinity": affinity,
         "logfreq_affinity": logfreq_affinity,
+        "participation_coverage": participation_coverage,
+        "participation_coverage_high": part_cov_high,
+        "participation_coverage_low": part_cov_low,
     })
 
 
@@ -535,6 +559,15 @@ def run_analysis(
         sig = (matched["mann_whitney_p"] < 0.05).sum()
         results["coverage_matched_sig_deciles"] = f"{sig}/{len(matched)}"
 
+    # ── Participation coverage vs JSD ────────────────────────────────────
+    if "participation_coverage" in neuron_df.columns and "jsd_contrib" in neuron_df.columns:
+        pc = neuron_df["participation_coverage"]
+        r, p = spearmanr(pc, jsd, nan_policy="omit")
+        results["spearman_participation_coverage_jsd"] = {"r": float(r), "p": float(p)}
+        # Partial: affinity → JSD | participation_coverage (paper's metric)
+        pr, pp = _partial_spearman(aff, jsd, pc)
+        results["partial_affinity_jsd_given_participation_coverage"] = {"r": pr, "p": pp}
+
     # ── Optional: merge with n_clusters ──────────────────────────────────
     if clusters_df is not None and "n_clusters" in clusters_df.columns:
         merged = neuron_df.merge(
@@ -559,6 +592,33 @@ def run_analysis(
             if len(matched_nc) > 0:
                 results["coverage_matched_nclusters"] = matched_nc.to_dict("records")
 
+            # ── Participation coverage vs n_clusters (paper's claim) ──
+            if "participation_coverage" in merged.columns:
+                mpc = merged["participation_coverage"]
+                r, p = spearmanr(mpc, nc, nan_policy="omit")
+                results["spearman_participation_coverage_nclusters"] = {"r": float(r), "p": float(p)}
+
+                # Raw mass vs n_clusters
+                mm = merged["raw_mass_total"]
+                r, p = spearmanr(mm, nc, nan_policy="omit")
+                results["spearman_raw_mass_nclusters"] = {"r": float(r), "p": float(p)}
+
+                # Decile analysis for participation coverage → n_clusters
+                merged_copy = merged.copy()
+                merged_copy["pc_decile"] = pd.qcut(
+                    mpc, q=10, labels=False, duplicates="drop",
+                )
+                pc_decile_stats = []
+                for d, g in merged_copy.groupby("pc_decile"):
+                    pc_decile_stats.append({
+                        "decile": int(d),
+                        "mean_participation_coverage": float(g["participation_coverage"].mean()),
+                        "mean_n_clusters": float(g["n_clusters"].mean()),
+                        "pct_monosemantic": float((g["n_clusters"] == 1).mean()),
+                        "n_neurons": len(g),
+                    })
+                results["participation_coverage_decile_nclusters"] = pc_decile_stats
+
     return results
 
 
@@ -571,6 +631,7 @@ MODEL_LAYERS = {
     "pythia-1b": 16, "pythia-1.4b": 24, "pythia-2.8b": 32,
     "pythia-6.9b": 32, "pythia-12b": 36,
     "olmo-1b": 16, "olmo-7b": 32,
+    "llama-2-7b": 32, "llama-3": 32,
 }
 
 
@@ -609,7 +670,7 @@ def run_single_checkpoint(
             layer_activations = pickle.load(f)
     else:
         print(f"\nLoading {model_id} @ {revision} on {device}")
-        load_kw: Dict[str, Any] = {"torch_dtype": torch.float16}
+        load_kw: Dict[str, Any] = {"torch_dtype": _model_torch_dtype(device)}
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
         if hf_token:
             load_kw["token"] = hf_token
@@ -690,6 +751,18 @@ def run_single_checkpoint(
             md = analysis["coverage_matched_mean_delta"]
             sd = analysis["coverage_matched_sig_deciles"]
             print(f"    Coverage-matched delta:   δ={md:+.3f}  sig={sd}")
+        if "partial_affinity_jsd_given_participation_coverage" in analysis:
+            pr = analysis["partial_affinity_jsd_given_participation_coverage"]["r"]
+            pp = analysis["partial_affinity_jsd_given_participation_coverage"]["p"]
+            sig = "*" if pp is not None and pp < 0.05 else ""
+            print(f"    Partial(aff, jsd | PC):   r={pr:+.3f} {sig}")
+        if "spearman_participation_coverage_nclusters" in analysis:
+            r_pc = analysis["spearman_participation_coverage_nclusters"]["r"]
+            r_bc = analysis.get("spearman_coverage_nclusters", {}).get("r", float("nan"))
+            r_rm = analysis.get("spearman_raw_mass_nclusters", {}).get("r", float("nan"))
+            print(f"    Spearman(PC, n_clusters): r={r_pc:+.3f}")
+            print(f"    Spearman(BC, n_clusters): r={r_bc:+.3f}")
+            print(f"    Spearman(RM, n_clusters): r={r_rm:+.3f}")
 
         all_analyses.append(analysis)
         all_neuron_dfs.append(neuron_df)
@@ -753,7 +826,7 @@ def run_experiment(
         print(f"  Testing with {len(test_samples)} samples, layer {test_layers}")
 
         from transformers import AutoModelForCausalLM
-        load_kw: Dict[str, Any] = {"torch_dtype": torch.float16}
+        load_kw: Dict[str, Any] = {"torch_dtype": _model_torch_dtype(device)}
         if hf_token:
             load_kw["token"] = hf_token
         if rev0 != "main":
