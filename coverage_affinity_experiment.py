@@ -509,7 +509,7 @@ def _coverage_matched_comparison(
             "n_low_aff": len(lo),
             "mean_outcome_high_aff": float(hi.mean()),
             "mean_outcome_low_aff": float(lo.mean()),
-            "mann_whitney_p": float(p),
+            "mann_whitney_p": float(np.asarray(p).flat[0]),
             "cliffs_delta": _cliffs_delta(hi, lo),
         })
     return pd.DataFrame(rows)
