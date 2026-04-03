@@ -1,7 +1,8 @@
-# Behavioral Convergence — Pythia 70M/6.9B across 15 training checkpoints
+# Behavioral Convergence — Pythia-6.9B only (70M already complete)
 # Measures output distribution divergence (JSD, KL, top-k overlap, rank corr)
 # between synonym pairs to track when behavioral convergence occurs vs internal metrics.
-# 1 GPU needed (inference only, fp16). Largest model (Pythia-6.9B) uses ~14GB VRAM.
+# 1 GPU needed (inference only, fp16). Pythia-6.9B uses ~14GB VRAM.
+# HF cache on PVC to avoid ephemeral storage blowout from 15 checkpoint downloads.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -66,24 +67,16 @@ spec:
             export HF_TOKEN=$(cat /data/ani/.hf_token)
           fi
 
-          # ============================================================
-          # 1. Pythia-70m — 15 checkpoints × 5 datasets (fast, ~15 min)
-          # ============================================================
-          echo ""
-          echo "=========================================================="
-          echo "  MODEL: EleutherAI/pythia-70m-deduped — $(date)"
-          echo "=========================================================="
-          python3 behavioral_convergence.py \
-            --all-datasets \
-            --dataset-dir ${DATASET_DIR} \
-            --model EleutherAI/pythia-70m-deduped \
-            --revisions ${PYTHIA_REVISIONS} \
-            --output-dir ${OUTPUT_ROOT}/pythia-70m \
-            --device cuda
-          echo "  Done: pythia-70m — $(date)"
+          # Redirect HF cache to PVC to avoid ephemeral storage blowout
+          export HF_HOME=/data/ani/mechinterp/.hf_cache
+          mkdir -p $HF_HOME
 
           # ============================================================
-          # 2. Pythia-6.9b — 15 checkpoints × 5 datasets (larger, ~2 hrs)
+          # Pythia-70m already complete — skip
+          # ============================================================
+
+          # ============================================================
+          # Pythia-6.9b — 15 checkpoints × 5 datasets
           # ============================================================
           echo ""
           echo "=========================================================="
