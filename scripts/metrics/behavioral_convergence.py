@@ -20,14 +20,14 @@ Metrics:
 
 Usage:
     # Single model, all checkpoints
-    python behavioral_convergence.py \
+    python -m scripts.metrics.behavioral_convergence \
         --all-datasets --dataset-dir ~/dev/personal/mechinterp/scaleJSD/dataset/legacy/filtered \
         --model EleutherAI/pythia-70m-deduped \
         --revisions step3000,step13000,...,step143000 \
         --output-dir results/behavioral_convergence/pythia-70m/
 
     # Quick validation
-    python behavioral_convergence.py \
+    python -m scripts.metrics.behavioral_convergence \
         --dataset emotion_ngrams_dedup_filtered.jsonl \
         --model EleutherAI/pythia-70m-deduped \
         --revisions step143000 \

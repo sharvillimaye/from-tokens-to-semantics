@@ -4,13 +4,13 @@
 
 Test whether the ablation dissociation (affinity↓ JSD, coverage↑ JSD) survives when measured with a normalization-free metric. Specifically: train linear frequency probes on **residual stream** activations extracted while ablation hooks are active.
 
-This closes the loop: correlation (Section 4) → probes (Step 3) → ablation (targeted_ablation.py) → **probes under ablation** (this experiment).
+This closes the loop: correlation (Section 4) → probes (Step 3) → ablation (`scripts/interventions/targeted_ablation.py`) → **probes under ablation** (this experiment).
 
 ---
 
 ## Why This Experiment Matters
 
-The current ablation measures JSD, which uses L1 normalization (`coverage_affinity_experiment.py:399`). When you ablate high-coverage neurons:
+The current ablation measures JSD, which uses L1 normalization (`scripts/metrics/coverage_affinity_experiment.py`). When you ablate high-coverage neurons:
 - Their 4H dimensions go to zero
 - L1 normalization redistributes probability mass to remaining neurons
 - Remaining specialized neurons get amplified → JSD increases
@@ -73,8 +73,8 @@ revision = "step143000"
 tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
 model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, torch_dtype=torch.float16).to("cuda").eval()
 
-# Load synonym pairs (reuse from coverage_affinity_experiment.py)
-from coverage_affinity_experiment import load_synonym_pairs, pairs_to_samples
+# Load synonym pairs (reuse from scripts/metrics/coverage_affinity_experiment.py)
+from scripts.metrics.coverage_affinity_experiment import load_synonym_pairs, pairs_to_samples
 pairs = load_synonym_pairs("path/to/emotion_ngrams_dedup_filtered.jsonl")
 samples = pairs_to_samples(pairs, tokenizer)
 # Each sample has: token_ids, anchor (position of target word), frequency_category ("high_freq"/"low_freq"), pair_id
@@ -117,10 +117,10 @@ class ResidualStreamCapture:
 
 **Important**: This captures the full layer output, which includes attention + MLP + residual connections. When you ablate MLP neurons, the residual stream changes because the MLP's contribution changes.
 
-### Step 3: Build ablation hooks (reuse from targeted_ablation.py)
+### Step 3: Build ablation hooks (reuse from scripts/interventions/targeted_ablation.py)
 
 ```python
-from targeted_ablation import AblationHook, select_neurons
+from scripts.interventions.targeted_ablation import AblationHook, select_neurons
 import pandas as pd
 
 neuron_df = pd.read_csv("path/to/neuron_metrics.csv")
@@ -340,10 +340,10 @@ Either outcome is informative for the paper.
 
 | Component | Existing code | Reuse? |
 |-----------|--------------|--------|
-| Model loading | `coverage_affinity_experiment.py` | Yes |
-| Synonym pair loading | `coverage_affinity_experiment.py:load_synonym_pairs, pairs_to_samples` | Yes |
-| Neuron selection | `targeted_ablation.py:select_neurons` | Yes |
-| Ablation hooks | `targeted_ablation.py:AblationHook` | Yes |
+| Model loading | `scripts/metrics/coverage_affinity_experiment.py` | Yes |
+| Synonym pair loading | `scripts/metrics/coverage_affinity_experiment.py:load_synonym_pairs, pairs_to_samples` | Yes |
+| Neuron selection | `scripts/interventions/targeted_ablation.py:select_neurons` | Yes |
+| Ablation hooks | `scripts/interventions/targeted_ablation.py:AblationHook` | Yes |
 | Residual stream capture | None (existing captures 4H, not H) | **New** |
 | Linear probe training | None locally (linear_probes repo uses nnterp) | **New** (sklearn) |
 | Distance metrics | None | **New** |

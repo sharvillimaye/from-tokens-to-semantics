@@ -58,7 +58,7 @@ Polysemanticity decreases through layers. JSD also decreases through layers. The
 
 **Method**: For each neuron, collect its top-activating input examples, compute neuron embeddings (Hadamard product of input weights and pre-MLP activations), then apply hierarchical agglomerative clustering (HAC). The cluster count (n_clusters) quantifies polysemanticity: n_clusters=1 means the neuron responds to one coherent concept, n_clusters=5 means it activates for 5 unrelated contexts.
 
-**Scaling update**: The original pipeline (ne_tlk.py + checkpoints_demo.py) processed ONE NEURON AT A TIME with a full forward pass each, requiring weeks for even partial coverage. We rewrote this as `neuron_polysemanticity.py` — single forward pass per layer, PyTorch hooks (no TransformerLens dependency), per-neuron min-heaps for top-k tracking, works on any HuggingFace model. Completed ALL neurons across 4 models in ~2.3 hours on H100:
+**Scaling update**: The original pipeline (ne_tlk.py + checkpoints_demo.py) processed ONE NEURON AT A TIME with a full forward pass each, requiring weeks for even partial coverage. We rewrote this as `scripts/metrics/neuron_polysemanticity.py` — single forward pass per layer, PyTorch hooks (no TransformerLens dependency), per-neuron min-heaps for top-k tracking, works on any HuggingFace model. Completed ALL neurons across 4 models in ~2.3 hours on H100:
 - Pythia-70M: 12,288 neurons (6 layers x 2,048) — 90 seconds
 - OLMo-1B: 131,072 neurons (16 layers x 8,192)
 - Pythia-6.9B: 524,288 neurons (32 layers x 16,384)
@@ -192,7 +192,7 @@ Monotonically decreasing: higher mass → fewer clusters. No inverted-U. Even th
 
 **Motivation**: The workshop paper's narrative implied "high coverage → monosemantic (specialized)." We needed to test whether this held with the paper's actual L1-normalized metric (participation coverage) against full n_clusters data, since the original JSD pipeline never formally merged these. The original `pythia70m_embeddings.parquet` referenced in the notebook config was never generated on the cluster — the original ne_tlk.py pipeline (one neuron per forward pass) never completed at scale.
 
-**Method**: Added participation coverage computation to `coverage_affinity_experiment.py`. For each phrase p, L1-normalize activations across neurons: share_h(p) = ReLU(a_h(p)) / sum_h' ReLU(a_h'(p)). Participation coverage = mean_p(share_h(p)). Ran on cached activations merged with n_clusters data from `neuron_polysemanticity.py` for all 4 models x 5 domains. (K8s job `ani-participation-coverage`, ~10 min total, 2026-04-03.)
+**Method**: Added participation coverage computation to `scripts/metrics/coverage_affinity_experiment.py`. For each phrase p, L1-normalize activations across neurons: share_h(p) = ReLU(a_h(p)) / sum_h' ReLU(a_h'(p)). Participation coverage = mean_p(share_h(p)). Ran on cached activations merged with n_clusters data from `scripts/metrics/neuron_polysemanticity.py` for all 4 models x 5 domains. (K8s job `ani-participation-coverage`, ~10 min total, 2026-04-03.)
 
 **Results** — Spearman correlation between participation coverage (PC) and n_clusters:
 
@@ -417,7 +417,7 @@ affinity_high_freq accounts for more JSD reduction (-6.4%) than affinity_low_fre
 
 Ablating broad-firing neurons increases JSD because these neurons contribute a common activation component to both high-freq and low-freq inputs. Removing them removes the shared "floor," making the remaining frequency-selective neurons more prominent in the L1-normalized JSD computation.
 
-**Normalization caveat**: JSD is computed on L1-normalized distributions (see `coverage_affinity_experiment.py:399`). Part of the coverage/mass JSD increase may be a mechanical renormalization artifact rather than a genuine increase in representational frequency discrimination. The probe-under-ablation experiment (design doc: `docs/probe-under-ablation-design.md`) would test this with a normalization-free metric (linear probe AUROC on raw residual stream activations under ablation).
+**Normalization caveat**: JSD is computed on L1-normalized distributions (see `scripts/metrics/coverage_affinity_experiment.py`). Part of the coverage/mass JSD increase may be a mechanical renormalization artifact rather than a genuine increase in representational frequency discrimination. The probe-under-ablation experiment (design doc: `neurips-2026/notes/probe-under-ablation-design.md`) would test this with a normalization-free metric (linear probe AUROC on raw residual stream activations under ablation).
 
 **4. The dissociation is universal across scale and architecture.**
 
@@ -459,13 +459,13 @@ Note: "affinity ablation reduces JSD" is supportive but close to a construct-val
 
 ### Open Controls
 
-1. **Probe under ablation** (highest priority follow-up): train linear frequency probes on raw residual stream activations extracted during ablation. This tests the dissociation without L1 normalization. Design: `docs/probe-under-ablation-design.md`.
+1. **Probe under ablation** (highest priority follow-up): train linear frequency probes on raw residual stream activations extracted during ablation. This tests the dissociation without L1 normalization. Design: `neurips-2026/notes/probe-under-ablation-design.md`.
 2. **Cosine/Euclidean distance** between mean high-freq and low-freq activation vectors under ablation — another normalization-free metric.
 3. **Synonym prediction accuracy** under ablation — behavioral measure rather than representational.
 
 ### Data
 
-Results in `results/ablation/` — per-model `ablation_results.csv` (original 5 strategies) and `ablation_lowcov_results.csv` (directional affinity + low_coverage). Columns: `strategy, pct, seed, layer, ablate_layers, n_ablated, clean_group_jsd, ablated_group_jsd, jsd_change, jsd_change_pct, clean_mean_pair_jsd, ablated_mean_pair_jsd, pair_jsd_change_pct, output_kl, dataset`. Script: `targeted_ablation.py`.
+Results in `results/ablation/` — per-model `ablation_results.csv` (original 5 strategies) and `ablation_lowcov_results.csv` (directional affinity + low_coverage). Columns: `strategy, pct, seed, layer, ablate_layers, n_ablated, clean_group_jsd, ablated_group_jsd, jsd_change, jsd_change_pct, clean_mean_pair_jsd, ablated_mean_pair_jsd, pair_jsd_change_pct, output_kl, dataset`. Script: `scripts/interventions/targeted_ablation.py`.
 
 ---
 
@@ -562,7 +562,7 @@ Added L1-normalized metric to pipeline. Results: paper's narrative is model-size
 Measured output KL divergence across Pythia checkpoints. Internal convergence did not clearly precede behavioral convergence — the relationship was noisy. Deprioritized in favor of the ablation approach which provides stronger mechanistic evidence.
 
 ### Step 2b: Targeted ablation -- COMPLETED (2026-04-04)
-Ablated neurons selected by each of the three axes (affinity, coverage, mass) plus controls (low_coverage, directional affinity, jsd, random) across 5 models. Found a causal dissociation: affinity ablation reduces JSD, coverage/mass ablation increases JSD, universally across all models. High-freq-preferring neurons carry ~2x more signal than low-freq-preferring. See "Targeted Ablation" section above. Results in `results/ablation/`. Main caveat: L1 normalization confound on coverage/mass direction — probe-under-ablation experiment needed (design: `docs/probe-under-ablation-design.md`).
+Ablated neurons selected by each of the three axes (affinity, coverage, mass) plus controls (low_coverage, directional affinity, jsd, random) across 5 models. Found a causal dissociation: affinity ablation reduces JSD, coverage/mass ablation increases JSD, universally across all models. High-freq-preferring neurons carry ~2x more signal than low-freq-preferring. See "Targeted Ablation" section above. Results in `results/ablation/`. Main caveat: L1 normalization confound on coverage/mass direction — probe-under-ablation experiment needed (design: `neurips-2026/notes/probe-under-ablation-design.md`).
 
 ### Step 3: Linear probes -- COMPLETED (2026-04-03)
 Probed all layers for frequency (high/low) and semantic category (5 one-vs-rest) across Pythia-70M (15 checkpoints), Pythia-6.9B (3 checkpoints), OLMo-1B, OLMo-7B. Key finding: frequency peaks mid-layers then is actively erased in late layers (training dynamics confirm this is learned). Semantic probes saturate by L2-5. The normative argument is revised: not "frequency first then semantics" but "frequency everywhere early then selectively removed." See "Linear Probes" section above. Results in `results/linear_probes/`. Caveat: semantic probes may pick up template structure — follow-up with domain-neutral templates needed.
@@ -598,7 +598,7 @@ Probed all layers for frequency (high/low) and semantic category (5 one-vs-rest)
 | Linear probes (freq vs semantic) | Pythia 70M (15 ckpts), Pythia 6.9B (3 ckpts), OLMo 1B/7B | **Complete (2026-04-03)** |
 | Targeted ablation (3-axis dissociation) | Pythia 70M/6.9B, OLMo 1B/7B, Llama 3.1 8B (8 strategies, 5 domains) | **Complete (2026-04-04)** |
 | Behavioral convergence | Pythia 70M (15 ckpts) | Complete (weak result, deprioritized) |
-| Probe under ablation (normalization control) | -- | **Not started (designed, see docs/probe-under-ablation-design.md)** |
+| Probe under ablation (normalization control) | -- | **Not started (designed, see neurips-2026/notes/probe-under-ablation-design.md)** |
 | Clustering hyperparameter sweep | -- | Not started |
 | Alternative clustering method | -- | Not started |
 | Outlier activation analysis | -- | Not started |

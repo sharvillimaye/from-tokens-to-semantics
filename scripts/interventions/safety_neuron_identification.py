@@ -33,7 +33,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Activation capture (reused from coverage_affinity_experiment.py)
+# Activation capture (reused from scripts/metrics/coverage_affinity_experiment.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ActivationCapture:

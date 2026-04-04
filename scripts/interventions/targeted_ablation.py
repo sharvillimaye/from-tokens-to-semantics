@@ -23,7 +23,7 @@ Measurements:
   - Output KL divergence between clean and ablated model
 
 Usage:
-    python targeted_ablation.py \
+    python -m scripts.interventions.targeted_ablation \
         --model EleutherAI/pythia-70m-deduped \
         --revision step143000 \
         --neuron-metrics results/coverage_affinity/pythia-70m/emotion/neuron_metrics.csv \
@@ -33,7 +33,7 @@ Usage:
         --ablate-pct 5
 
     # All datasets
-    python targeted_ablation.py \
+    python -m scripts.interventions.targeted_ablation \
         --model EleutherAI/pythia-70m-deduped \
         --revision step143000 \
         --all-datasets \
@@ -61,17 +61,30 @@ import torch.nn.functional as F
 EPS = 1e-12
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Reuse ActivationCapture + data loading from coverage_affinity_experiment
+# Reuse ActivationCapture + data loading from scripts/metrics/coverage_affinity_experiment
 # ─────────────────────────────────────────────────────────────────────────────
 
-from coverage_affinity_experiment import (
-    ActivationCapture,
-    load_synonym_pairs,
-    pairs_to_samples,
-    compute_group_jsd,
-    compute_pairwise_jsd,
-    _infer_layers,
-)
+try:
+    from scripts.metrics.coverage_affinity_experiment import (
+        ActivationCapture,
+        load_synonym_pairs,
+        pairs_to_samples,
+        compute_group_jsd,
+        compute_pairwise_jsd,
+        _infer_layers,
+    )
+except ImportError:
+    import sys
+
+    sys.path.append(str(Path(__file__).resolve().parents[2]))
+    from scripts.metrics.coverage_affinity_experiment import (
+        ActivationCapture,
+        load_synonym_pairs,
+        pairs_to_samples,
+        compute_group_jsd,
+        compute_pairwise_jsd,
+        _infer_layers,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

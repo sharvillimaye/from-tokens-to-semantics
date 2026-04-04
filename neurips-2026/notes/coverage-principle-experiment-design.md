@@ -27,7 +27,7 @@ This has three issues:
 These issues may cause coverage to absorb variance that legitimately belongs to affinity,
 making affinity appear uninformative when it may not be.
 
-## Fixed Metrics (coverage_affinity_experiment.py)
+## Fixed Metrics (`scripts/metrics/coverage_affinity_experiment.py`)
 
 ### Binary Coverage (replaces L1-normalized firing mass)
     coverage(h) = fraction of phrases where activation > 0
@@ -107,7 +107,7 @@ Match on (layer, neuron) where neuron is the 4H MLP neuron index.
 ### Execution
 ```bash
 # Per model:
-python coverage_affinity_experiment.py \
+python -m scripts.metrics.coverage_affinity_experiment \
     --all-datasets \
     --dataset-dir ~/dev/personal/mechinterp/scaleJSD/dataset/legacy/filtered \
     --model EleutherAI/pythia-70m-deduped \
@@ -128,5 +128,5 @@ For GPU runs (pythia-160m, 410m), use the Lambda cluster K8s setup.
 5. Does the fixed metric change the polytope density / participation ratio story?
 
 ## File Location
-coverage_affinity_experiment.py at project root. Self-contained — no nnsight dependency,
+`scripts/metrics/coverage_affinity_experiment.py`. Self-contained — no nnsight dependency,
 uses standard transformers + PyTorch hooks. Supports --validate for smoke testing.

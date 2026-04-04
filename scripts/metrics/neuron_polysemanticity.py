@@ -17,7 +17,7 @@ Algorithm:
      intra/inter-cluster distances.
 
 Output CSV columns: layer, neuron, n_clusters, n_examples, mean_intra, mean_inter, mean_dist
-This is designed to feed directly into coverage_affinity_experiment.py --clusters.
+This is designed to feed directly into `scripts/metrics/coverage_affinity_experiment.py --clusters`.
 
 Note on gated MLPs (LLaMA/Mistral): The intermediate activation depends on BOTH
 gate_proj and up_proj. For neuron embeddings we use the up_proj weight vector

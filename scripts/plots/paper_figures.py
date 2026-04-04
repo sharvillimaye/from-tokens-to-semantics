@@ -10,11 +10,11 @@ Generates a complete figure set from:
 Designed for NeurIPS/ICML submission. All figures are PDF-ready for Overleaf.
 
 Usage:
-    python paper_figures.py \
+    python -m scripts.plots.paper_figures \
         --polytope-dir ./polytope_results \
         --jsd-dir ./jsd_polysemanticity/runs_jsd_poly \
         --shuffled-dir ./jsd_polysemanticity/runs_jsd_poly_shuffled_control \
-        --output-dir ./paper_figures
+        --output-dir ./neurips-2026/figures/main
 """
 
 from __future__ import annotations
@@ -772,7 +772,7 @@ def main():
     parser.add_argument("--shuffled-dir", type=Path,
                         default=Path("./jsd_polysemanticity/runs_jsd_poly_shuffled_control"),
                         help="Directory containing shuffled control outputs")
-    parser.add_argument("--output-dir", type=Path, default=Path("./paper_figures"),
+    parser.add_argument("--output-dir", type=Path, default=Path("./neurips-2026/figures/main"),
                         help="Output directory for figures")
     args = parser.parse_args()
 

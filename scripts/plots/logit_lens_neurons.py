@@ -9,7 +9,7 @@ Then group neurons by coverage and affinity quartiles and characterize what
 each group encodes.
 
 Usage:
-    python logit_lens_neurons.py \
+    python -m scripts.plots.logit_lens_neurons \
         --model EleutherAI/pythia-70m-deduped \
         --revision step143000 \
         --metrics results/coverage_affinity/pythia-70m/emotion/neuron_metrics.csv \

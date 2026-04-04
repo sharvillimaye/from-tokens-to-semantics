@@ -22,7 +22,7 @@ Tracking every reviewer concern from the NeurIPS 2025 MechInterp Workshop review
 | 54oj-3 | Only analyzing every 20th neuron (70M) / every 60th neuron (160M) — 95-98% of neurons ignored | Partially addressed | Coverage-affinity experiment uses ALL neurons. Neuron embedding clustering (analysis 1) still subsamples. Either run on all neurons (compute permitting) or provide statistical justification (random sampling with CI) |
 | 54oj-4 | Single semantic domain (country-capital pairs with rigid templates) | Addressed | ScaleJSD dataset: 5 domains (emotion, medical, legal, scientific, verb), 291 pairs, varied templates |
 | 54oj-5 | Only MLP neurons — ignoring attention heads | Not addressed | Run JSD and polytope density on attention head outputs. At minimum for a subset of models. If same layerwise pattern holds, strengthens universality. If different, that's more interesting |
-| 54oj-6 | No theoretical explanation for why coverage emerges as organizing principle | Not addressed (planned) | This is the normative argument — the centerpiece of the conference paper. See research-summary.md "Normative Argument" section |
+| 54oj-6 | No theoretical explanation for why coverage emerges as organizing principle | Not addressed (planned) | This is the normative argument — the centerpiece of the conference paper. See `neurips-2026/notes/research-summary.md` "Normative Argument" section |
 | 54oj-7 | No connection to model capabilities / performance | Not addressed (planned) | Behavioral convergence experiment: track output distribution similarity for synonym pairs across checkpoints alongside internal metrics |
 | 54oj-8 | Cross-lingual / multilingual analysis | Not addressed | Lower priority. Frame as future work unless a multilingual Pythia-equivalent exists with training checkpoints |
 
@@ -79,7 +79,7 @@ Tracking every reviewer concern from the NeurIPS 2025 MechInterp Workshop review
 
 | Item | Addresses | Effort | Description |
 |------|-----------|--------|-------------|
-| Normative argument | 54oj-6, Q3Mh-7 | 4-6 weeks | Gradient dynamics explanation for why layerwise decomposition emerges. Includes: gradient SNR tracking, linear probes, toy model. See research-summary.md for full plan |
+| Normative argument | 54oj-6, Q3Mh-7 | 4-6 weeks | Gradient dynamics explanation for why layerwise decomposition emerges. Includes: gradient SNR tracking, linear probes, toy model. See `neurips-2026/notes/research-summary.md` for full plan |
 | Behavioral convergence | 54oj-7, Q3Mh-9 | 1-2 weeks | Track output distribution similarity for synonym pairs across checkpoints. Show internal metrics lead behavioral convergence. Supports the "training-time tools" claim |
 
 ### Priority 2: Robustness (both reviewers flagged, will be flagged again)

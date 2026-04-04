@@ -16,27 +16,27 @@ Fixes over the original JSD polysemanticity pipeline (pipeline_notebook.ipynb):
 
 Usage:
     # Single checkpoint
-    python coverage_affinity_experiment.py \\
+    python -m scripts.metrics.coverage_affinity_experiment \\
         --dataset ~/dev/personal/mechinterp/scaleJSD/dataset/legacy/filtered/emotion_ngrams_dedup_filtered.jsonl \\
         --model EleutherAI/pythia-70m-deduped \\
         --revisions step143000 \\
         --output-dir results/coverage_affinity/pythia-70m/emotion/
 
     # Multiple checkpoints for training dynamics
-    python coverage_affinity_experiment.py \\
+    python -m scripts.metrics.coverage_affinity_experiment \\
         --dataset ... \\
         --revisions step1000,step43000,step143000 \\
         --output-dir results/coverage_affinity/pythia-70m/emotion/
 
     # All datasets at once
-    python coverage_affinity_experiment.py \\
+    python -m scripts.metrics.coverage_affinity_experiment \\
         --all-datasets --dataset-dir ~/dev/personal/mechinterp/scaleJSD/dataset/legacy/filtered \\
         --model EleutherAI/pythia-70m-deduped \\
         --revisions step143000 \\
         --output-dir results/coverage_affinity/pythia-70m/
 
     # Validate setup without full run (first 5 pairs, 1 layer)
-    python coverage_affinity_experiment.py --dataset ... --output-dir /tmp/test --validate
+    python -m scripts.metrics.coverage_affinity_experiment --dataset ... --output-dir /tmp/test --validate
 
 Outputs:
     neuron_metrics.csv   — per (checkpoint, layer, neuron): coverage, mass, affinity, jsd_contrib
