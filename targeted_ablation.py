@@ -106,6 +106,13 @@ def select_neurons(
         selected = rng.choice(layer_df["neuron"].values, size=k, replace=False)
     elif strategy == "mass":
         selected = layer_df.nlargest(k, "raw_mass_total")["neuron"].values
+    elif strategy == "low_coverage":
+        # Narrowest-firing neurons (bottom pct% by coverage)
+        # Filter out dead neurons (coverage == 0) to avoid trivial null
+        active = layer_df[layer_df["coverage_total"] > 0]
+        if len(active) < k:
+            active = layer_df
+        selected = active.nsmallest(k, "coverage_total")["neuron"].values
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -286,7 +293,7 @@ def run_ablation_experiment(
 
     results = []
 
-    strategies = ["affinity", "coverage", "jsd", "mass", "random"]
+    strategies = ["affinity", "coverage", "low_coverage", "jsd", "mass", "random"]
 
     for pct in ablate_pcts:
         for strategy in strategies:
