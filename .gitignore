@@ -147,7 +147,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+**/k8s/
 # Spyder project settings
 .spyderproject
 .spyproject
