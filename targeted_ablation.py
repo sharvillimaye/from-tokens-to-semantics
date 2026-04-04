@@ -113,6 +113,12 @@ def select_neurons(
         if len(active) < k:
             active = layer_df
         selected = active.nsmallest(k, "coverage_total")["neuron"].values
+    elif strategy == "affinity_high_freq":
+        # Neurons that prefer high-frequency tokens (affinity >> 0.5)
+        selected = layer_df.nlargest(k, "frequency_affinity")["neuron"].values
+    elif strategy == "affinity_low_freq":
+        # Neurons that prefer low-frequency tokens (affinity << 0.5)
+        selected = layer_df.nsmallest(k, "frequency_affinity")["neuron"].values
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -293,7 +299,7 @@ def run_ablation_experiment(
 
     results = []
 
-    strategies = ["affinity", "coverage", "low_coverage", "jsd", "mass", "random"]
+    strategies = ["affinity", "affinity_high_freq", "affinity_low_freq", "coverage", "low_coverage", "jsd", "mass", "random"]
 
     for pct in ablate_pcts:
         for strategy in strategies:
