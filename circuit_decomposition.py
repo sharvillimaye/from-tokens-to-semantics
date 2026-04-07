@@ -45,11 +45,39 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from coverage_affinity_experiment import (
-    load_synonym_pairs,
-    pairs_to_samples,
-    _infer_layers,
-)
+import sys, importlib.util
+
+# Dynamic import: handle both flat and reorganized repo layouts
+_cae_candidates = [
+    "coverage_affinity_experiment",
+    "scripts.metrics.coverage_affinity_experiment",
+]
+_cae = None
+for _name in _cae_candidates:
+    try:
+        _cae = importlib.import_module(_name)
+        break
+    except ModuleNotFoundError:
+        continue
+
+# If module import fails, try direct file path
+if _cae is None:
+    for _path in [
+        Path(__file__).parent / "scripts" / "metrics" / "coverage_affinity_experiment.py",
+        Path(__file__).parent / "coverage_affinity_experiment.py",
+    ]:
+        if _path.exists():
+            spec = importlib.util.spec_from_file_location("coverage_affinity_experiment", _path)
+            _cae = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_cae)
+            break
+
+if _cae is None:
+    raise ImportError("Cannot find coverage_affinity_experiment.py in any expected location")
+
+load_synonym_pairs = _cae.load_synonym_pairs
+pairs_to_samples = _cae.pairs_to_samples
+_infer_layers = _cae._infer_layers
 
 
 # ─────────────────────────────────────────────────────────────────────────────
