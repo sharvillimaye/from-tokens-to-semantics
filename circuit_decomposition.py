@@ -575,7 +575,7 @@ def main():
     # Summary
     if all_summary:
         with open(out / "summary.json", "w") as f:
-            json.dump(all_summary, f, indent=2)
+            json.dump(all_summary, f, indent=2, default=lambda x: float(x) if hasattr(x, 'item') else str(x))
 
     print(f"\nSaved to {out}:")
     print(f"  component_projections.csv: {len(all_component)} rows")
