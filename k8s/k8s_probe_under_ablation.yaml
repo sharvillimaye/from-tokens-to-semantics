@@ -40,6 +40,7 @@ spec:
                   https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
               fi
               cd $REPO_DIR
+              export PYTHONPATH=$REPO_DIR:$PYTHONPATH
 
               pip install transformers scipy pandas numpy torch scikit-learn 2>/dev/null
 
