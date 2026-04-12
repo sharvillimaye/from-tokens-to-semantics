@@ -39,7 +39,7 @@ spec:
           echo "=== Verifying module exists ==="
           ls -la scripts/interventions/frequency_circuit_tracing.py
 
-          pip install transformers scipy pandas numpy torch scikit-learn 2>/dev/null
+          pip install transformers scipy pandas numpy torch scikit-learn > /dev/null 2>&1
 
           DATASET_DIR=/data/ani/mechinterp/code/scaleJSD/dataset/legacy/filtered
           if [ ! -d "$DATASET_DIR" ]; then
