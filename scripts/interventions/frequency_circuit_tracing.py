@@ -390,8 +390,8 @@ def run_circuit_tracing(
 
     # Prepare inputs
     token_ids_list = [s["token_ids"] for s in samples]
-    anchor_positions = [s["anchor_position"] for s in samples]
-    freq_labels = np.array([1 if s["frequency"] == "high" else 0 for s in samples])
+    anchor_positions = [s["anchor"] for s in samples]
+    freq_labels = np.array([1 if s["frequency_category"] == "high_freq" else 0 for s in samples])
     pair_ids = np.array([s["pair_id"] for s in samples])
 
     # Set up hooks
@@ -410,7 +410,7 @@ def run_circuit_tracing(
     # We need to capture per-sample because anchor positions differ
     for i, sample in enumerate(samples):
         input_ids = torch.tensor([sample["token_ids"]], device=device)
-        anchor_pos = sample["anchor_position"]
+        anchor_pos = sample["anchor"]
 
         # Register hooks for this forward pass
         cap = ComponentCapture(model, all_layers, token_indices=[anchor_pos])
