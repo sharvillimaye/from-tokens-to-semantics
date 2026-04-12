@@ -247,14 +247,10 @@ def decompose_mlp_by_neuron(
     N, four_H = post_act.shape
     H = down_proj_weight.shape[0]
 
-    # W_down[:, h] projected onto freq_direction gives a scalar per neuron
-    # proj_h = <W_down[:, h], freq_direction>
-    # This is input-independent — it's the "frequency alignment" of each neuron's output
-    neuron_freq_alignment = down_proj_weight @ freq_direction  # [4H]
-    # Wait — down_proj is [H, 4H], so down_proj.T @ freq_direction = [4H]
-    # Actually: neuron h's contribution to residual = activation_h * W_down[:, h]
+    # Each neuron h's contribution to residual = activation_h * W_down[:, h]
     # Projection onto freq_dir = activation_h * <W_down[:, h], freq_dir>
     # = activation_h * (W_down.T @ freq_dir)[h]
+    # down_proj is [H, 4H], so .T is [4H, H], and .T @ freq_dir is [4H]
     neuron_freq_alignment = down_proj_weight.T @ freq_direction  # [4H]
 
     # Per-neuron, per-sample frequency projection
