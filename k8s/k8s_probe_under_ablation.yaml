@@ -30,17 +30,15 @@ spec:
             - |
               set -e
 
-              # --- Setup ---
+              # --- Setup (fresh clone to pick up latest code) ---
               REPO_DIR=/data/ani/mechinterp/polytope-code
-              if [ -d "$REPO_DIR/.git" ]; then
-                cd $REPO_DIR && git fetch origin && git checkout polytope-results && git pull origin polytope-results
-              else
-                rm -rf $REPO_DIR
-                git clone --branch polytope-results --single-branch \
-                  https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
-              fi
+              rm -rf $REPO_DIR
+              git clone --branch polytope-results --single-branch \
+                https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
               cd $REPO_DIR
               export PYTHONPATH=$REPO_DIR:$PYTHONPATH
+              echo "=== Verifying module exists ==="
+              ls -la scripts/interventions/probe_under_ablation.py
 
               pip install transformers scipy pandas numpy torch scikit-learn 2>/dev/null
 
