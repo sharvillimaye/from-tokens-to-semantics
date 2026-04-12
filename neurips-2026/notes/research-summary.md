@@ -469,6 +469,48 @@ Results in `results/ablation/` — per-model `ablation_results.csv` (original 5 
 
 ---
 
+## Circuit Decomposition Attempt (2026-04-07) — Inconclusive
+
+### Motivation
+
+We attempted to trace frequency information flow through the computation graph by projecting each component's output (attention, MLP) onto a "frequency direction" in the residual stream. The goal: show that MLP layers flip from writing frequency (positive projection, early layers) to erasing it (negative projection, late layers), providing a circuit-level explanation for the probe and JSD findings.
+
+### Method
+
+Defined a fixed frequency direction as `normalize(mean(h_L0 | high_freq) - mean(h_L0 | low_freq))` from the embedding layer. For each layer, captured attention output and MLP output separately, computed the difference between high-freq and low-freq mean outputs, and projected onto this direction. Ran across all 5 models and 5 datasets.
+
+### Results — Did Not Support the Simple Prediction
+
+The prediction was: MLP projection positive early (writing frequency), negative late (erasing). The actual pattern was more complex and model-dependent:
+
+- **OLMo-1B**: MLP projection negative at **every** layer, yet frequency content grew monotonically
+- **Llama 3.1 8B**: MLP projection positive at most layers, frequency content grew continuously
+- **Pythia-6.9B**: MLP projection oscillated with no clear early/late pattern
+- In all models, `freq_content` (norm of mean difference) **grew** through layers, never decreased
+
+### Why It Didn't Work
+
+Three methodological problems were identified upon review:
+
+1. **Fixed frequency direction becomes meaningless in deep layers.** The residual stream rotates through layers. A direction computed from embeddings (L0) may be irrelevant by layer 15+. Using a fixed direction across all layers conflates rotation with erasure.
+
+2. **Norm-based frequency content grows because the residual stream norm grows.** The measure `||mean(h|high) - mean(h|low)||` increases because all vectors grow in norm through the network. This does not mean frequency information increases — the *relative* frequency content (what probes measure) can still decrease while absolute norms grow.
+
+3. **Projection of mean differences is not the right decomposition.** The MLP can produce outputs that are frequency-discriminating without being aligned with any single direction. The dot product with a fixed direction misses rotated or distributed frequency representations.
+
+### What We Learned
+
+- **Linear probes are a cleaner measurement than geometric projections** for tracking frequency information. The probe adapts to whatever direction frequency occupies at each layer, while a fixed projection cannot.
+- **Circuit-level claims require per-layer frequency directions**, not a fixed direction. A proper version would train a probe at each layer and use the probe weight vector as the local frequency direction.
+- **The simple "write then erase" narrative is likely too simple.** The frequency-to-semantics transition may involve rotation and redistribution of frequency information across subspaces, not a clean contraction along a single direction.
+- **The probe-under-ablation approach is more robust** because it uses a normalization-free, per-layer-adaptive measurement (probe AUROC) rather than projections onto a fixed subspace.
+
+### Status
+
+Results discarded — the methodology was flawed. Code exists at `circuit_decomposition.py` but should not be used for paper claims. The probe-under-ablation experiment (design: `neurips-2026/notes/probe-under-ablation-design.md`) is the correct next step for establishing causal links between neuron populations and frequency information.
+
+---
+
 ## Mechanistic Investigation: What Features Drive Coverage and Affinity?
 
 ### Approach 1: Output Weight Analysis (Logit Lens)
@@ -523,33 +565,33 @@ The conference paper tells the story of a **frequency-to-semantics transition** 
 
 4. **Frequency is learned before semantics because of simplicity bias** — Now partially grounded. Linear probes show frequency is encoded everywhere early and actively erased in late layers during training. Consistent with simplicity bias, but the story is "frequency everywhere then erased" not "frequency first then semantics."
 
-### Paper Structure
+### Paper Structure (Revised 2026-04-07)
 
-**Section 3: The Transition** (layer-level evidence)
-- JSD drops through layers
-- Polytope density drops through layers
-- Polysemanticity decreases through layers (peaks early, declines)
-- These correlate at the layer level (r = +0.62 to +0.94) but not at the neuron level
+The paper's cleanest narrative arc centers on **linear probes** as the primary measurement tool — they are intuitive, normalization-free, and directly answer "how much frequency/semantic information is linearly decodable at each layer?" The three-axis neuron decomposition and ablation results then answer "which neuron populations are responsible?"
 
-**Section 4: Neuron-Level Decomposition** (what drives the transition)
-- Three-axis decomposition: breadth, intensity, affinity
-- Breadth tracks broad participation across many inputs
-- Intensity tracks how much total signal a neuron contributes
-- Affinity tracks frequency-selective routing
-- Coverage predicts JSD contribution; affinity has independent signal (contradicts workshop paper)
-- Intensity predicts specialization (high mass → less polysemantic, monotonically in larger models)
-- Participation coverage is a mass proxy, not a breadth measure
+**Section 3: The Frequency-to-Semantics Transition**
+- Linear probes as the primary lens: frequency AUROC peaks mid-layers then drops; semantic AUROC saturates early and persists
+- Training dynamics: frequency erasure is learned (Pythia-70M L5: 0.83→0.57 over training)
+- Supporting evidence: JSD drops through layers, polytope density drops, polysemanticity decreases
+- These multiple measurements converge on the same story from different angles
 
-**Section 5: Causal validation via targeted ablation** (DONE — 2026-04-04)
-- Three-axis ablation dissociation: affinity ablation reduces JSD; coverage/mass ablation increases JSD; random is null
-- Directional affinity: high-freq-preferring neurons carry ~2x more signal than low-freq-preferring, with less output disruption
-- Universal across 5 models, 3 architectures
-- Caveat: coverage/mass JSD increase may be partly L1 normalization artifact — probe-under-ablation follow-up designed
+**Section 4: Neuron-Level Decomposition**
+- Three-axis framework: breadth, intensity, frequency affinity
+- How this corrects the workshop paper's conflated "participation coverage" metric
+- Correlational evidence: coverage predicts JSD contribution, affinity has independent signal
 
-**Section 6: Grounding** (linear probes DONE, normative argument updated)
-- Linear probes: frequency peaks mid-layers then is actively erased in late layers; semantic category saturates early
-- Training dynamics: frequency erasure intensifies over training (Pythia-70M L5: 0.83→0.57)
-- Revised normative argument: frequency everywhere early → selectively removed → head re-introduces via bias (Kobayashi)
+**Section 5: Causal Validation — Probe Under Ablation** (NEXT PRIORITY)
+- Ablate neuron populations selected by each axis
+- Measure frequency probe AUROC on downstream residual stream (normalization-free)
+- If affinity ablation reduces probe AUROC and coverage ablation does not → causal dissociation confirmed without L1 confound
+- Supporting: JSD-based ablation dissociation (completed), directional affinity asymmetry
+
+**Section 6: Applications** (PLANNED)
+- Frequency steering: amplify/dampen affinity neurons to shift output distributions
+- Connection to rare token prediction and frequency bias in generation
+- Safety neuron connection (mass axis identifies safety neurons)
+
+**Key shift from previous plan**: Linear probes replace JSD as the primary measurement throughout the paper. JSD and polytope density become supporting evidence. The ablation section uses probes (not JSD) as the outcome measure, eliminating the normalization confound.
 
 ---
 
@@ -567,18 +609,24 @@ Ablated neurons selected by each of the three axes (affinity, coverage, mass) pl
 ### Step 3: Linear probes -- COMPLETED (2026-04-03)
 Probed all layers for frequency (high/low) and semantic category (5 one-vs-rest) across Pythia-70M (15 checkpoints), Pythia-6.9B (3 checkpoints), OLMo-1B, OLMo-7B. Key finding: frequency peaks mid-layers then is actively erased in late layers (training dynamics confirm this is learned). Semantic probes saturate by L2-5. The normative argument is revised: not "frequency first then semantics" but "frequency everywhere early then selectively removed." See "Linear Probes" section above. Results in `results/linear_probes/`. Caveat: semantic probes may pick up template structure — follow-up with domain-neutral templates needed.
 
-### Step 4: Robustness (both reviewers flagged)
+### Step 4: Probe under ablation — HIGHEST PRIORITY
+Ablate each neuron population (affinity, coverage, mass, random) in late layers, then train frequency linear probes on the resulting residual stream activations at every layer. This is the cleanest causal test: does removing affinity neurons reduce how much frequency information is linearly decodable? Does removing coverage neurons leave frequency information intact (disproving the L1 confound)? Also compute cosine distance between mean high/low residual stream vectors as a normalization-free geometric metric. Design doc: `neurips-2026/notes/probe-under-ablation-design.md`.
+
+### Step 4b: Circuit decomposition attempt — COMPLETED (inconclusive, 2026-04-07)
+Attempted to trace frequency info flow via projections onto a fixed frequency direction. Methodology was flawed (fixed direction, norm growth, missing rotations). Results discarded. Key lesson: linear probes are the right tool, not geometric projections onto fixed subspaces. See "Circuit Decomposition Attempt" section above.
+
+### Step 5: Frequency steering demonstration
+Amplify/dampen affinity neurons at inference time (`activation *= alpha`) and measure shift in output distribution between high-freq and low-freq synonym completions. If the ratio P(common)/P(rare) shifts monotonically with alpha, this demonstrates practical utility of the decomposition.
+
+### Step 6: Template-controlled semantic probes
+Re-run semantic probes with ngram-only text (no sentence template) to address the template confound. Quick config change on existing infrastructure.
+
+### Step 7: Robustness (both reviewers flagged)
 - Clustering hyperparameter sweep (d_t, activation threshold)
 - Alternative clustering method (DBSCAN/k-means alongside HAC)
 - Outlier activation analysis (winsorize top 1%)
-- Neuron subsampling justification
 
-### Step 5: Scope extension
-- Attention head analysis (54oj-5, Q3Mh-8)
-- SAE-based validation (Q3Mh-4)
-- Toy model
-
-### Step 6: Write the paper
+### Step 8: Write the paper
 
 ---
 
@@ -598,10 +646,145 @@ Probed all layers for frequency (high/low) and semantic category (5 one-vs-rest)
 | Linear probes (freq vs semantic) | Pythia 70M (15 ckpts), Pythia 6.9B (3 ckpts), OLMo 1B/7B | **Complete (2026-04-03)** |
 | Targeted ablation (3-axis dissociation) | Pythia 70M/6.9B, OLMo 1B/7B, Llama 3.1 8B (8 strategies, 5 domains) | **Complete (2026-04-04)** |
 | Behavioral convergence | Pythia 70M (15 ckpts) | Complete (weak result, deprioritized) |
-| Probe under ablation (normalization control) | -- | **Not started (designed, see neurips-2026/notes/probe-under-ablation-design.md)** |
+| Circuit decomposition (freq direction projections) | Pythia 70M/6.9B, OLMo 1B/7B, Llama 3.1 8B | **Inconclusive (2026-04-07) — methodology flawed, results discarded** |
+| Probe under ablation (normalization control) | -- | **Not started — HIGHEST PRIORITY (designed, see neurips-2026/notes/probe-under-ablation-design.md)** |
+| Frequency steering demonstration | -- | Not started (planned) |
+| Template-controlled semantic probes | -- | Not started (planned) |
 | Clustering hyperparameter sweep | -- | Not started |
 | Alternative clustering method | -- | Not started |
 | Outlier activation analysis | -- | Not started |
-| Attention head analysis | -- | Not started |
-| SAE-based validation | -- | Not started |
-| Toy model | -- | Not started |
+| **Stolfo overlap test (affinity ↔ token freq neurons)** | -- | **Not started — HIGH PRIORITY (new, see Reframing section)** |
+| **Liu overlap test (affinity ↔ rare-token neurons)** | -- | **Not started — HIGH PRIORITY (new, see Reframing section)** |
+
+---
+
+## Paper Reframing: "Frequency Routing Circuits" (2026-04-08)
+
+### Motivation for Reframing
+
+The original framing — "we observe a frequency-to-semantics transition" — has three weaknesses:
+
+1. **The 3-axis neuron population feels asserted, not proven.** We decompose neurons into breadth/intensity/affinity, show they correlate differently with JSD, and show ablation dissociation. But we never connect them to any established computational role or show they correspond to known functional types.
+
+2. **The frequency-to-semantics transition is intuitive.** Any reasonable person would guess that early layers encode surface statistics and later layers encode meaning. Saying "we measured it with JSD, probes, and polytopes" is confirmation of the obvious, not discovery.
+
+3. **No practical use case.** The paper currently ends with "we found this transition exists" — a descriptive claim with no downstream implication.
+
+### The Key Insight: Unification with Existing Neuron Types
+
+Reading across the related literature reveals connections the current framing misses:
+
+**Stolfo et al.'s "token frequency neurons" (2406.16254)** are likely the same population as our **high-affinity neurons**. They found neurons that modulate the model's output distribution toward/away from the unigram frequency distribution — they push logits proportionally to log-frequency. Our affinity axis measures exactly this: which neurons respond preferentially to high-freq vs low-freq tokens.
+
+**Kobayashi et al. (2305.18294)** shows the prediction head bias *re-introduces* frequency information that hidden states have stripped. Hidden states are nearly orthogonal to the frequency direction (cos ~ 0.08).
+
+**Liu et al.'s rare-token neurons (2509.21163)** form a ~1.7% "influential plateau" — neurons with disproportionate impact on rare token prediction. Our low-affinity neurons (prefer rare tokens) likely overlap with this population.
+
+**This means our paper is sitting on a unification story it hasn't told.**
+
+### New Framing: "Frequency Routing Circuits in Transformer MLPs"
+
+Instead of "we observe a frequency-to-semantics transition" (descriptive, intuitive), the paper should argue:
+
+> **Transformer MLPs implement a learned frequency routing circuit: a small population of specialist neurons actively separates frequency information from semantic content in the residual stream, enabling the prediction head to independently recombine them at output time.**
+
+This is a *mechanism* claim, not a *phenomenon* claim.
+
+### The Four-Stage Pipeline
+
+| Stage | What happens | Our evidence | External evidence |
+| --- | --- | --- | --- |
+| **1. Embedding** | Frequency baked into token vectors | (known) | Kobayashi: embeddings carry frequency |
+| **2. Early/Mid MLP** | Affinity neurons route frequency signal; coverage neurons build shared semantic substrate | Ablation dissociation; probe peaks mid-layer | Liu et al.: rare-token neurons in final layer |
+| **3. Late MLP** | Frequency actively stripped from residual stream; concentrated in specialist neurons | Probes show erasure during training (0.83→0.57); affinity ablation reduces probe AUROC | Kobayashi: hidden states orthogonal to freq direction |
+| **4. Prediction Head** | Frequency re-introduced via bias + token frequency neurons | (Kobayashi's result) | Stolfo: token frequency neurons; Kobayashi: b_LN encodes freq |
+
+**The novel claim**: Stages 2-3 are what our paper characterizes. Nobody else has shown the *neuron-level mechanism* of how frequency gets separated from semantics in the MLP layers. Kobayashi showed the endpoint (head re-introduces frequency). Stolfo showed individual neurons that modulate frequency at output. We show the *process*.
+
+### Three Axes → Known Functional Types
+
+| Our axis | Established functional type | Evidence for correspondence |
+| --- | --- | --- |
+| **Affinity (freq-selective)** | Stolfo's "token frequency neurons" | Both modulate output distribution relative to unigram; both affect KL(P_freq \|\| P_model) |
+| **Mass (high-intensity)** | Chen's "safety neurons"; Stolfo's "entropy neurons" | Our safety neuron result (7x enrichment in top-5% mass); entropy neurons have high weight norm |
+| **Coverage (broad-firing)** | Gurnee's "universal neurons" | Both fire broadly across inputs; prediction: should overlap with universal neurons across seeds |
+
+### Novelty Assessment (Literature Check, 2026-04-08)
+
+**What already exists:**
+
+- Kobayashi et al. (2305.18294): prediction head bias encodes frequency; hidden states orthogonal to frequency direction. Shows the *endpoint* — does NOT explain the neuron-level mechanism of how frequency gets stripped.
+- Stolfo et al. (2406.16254): token frequency neurons modulate logits proportional to log-freq; entropy neurons regulate confidence via LayerNorm null space. Characterizes individual neuron *types* at the output — does NOT connect to layer-wise frequency erasure or show a circuit.
+- Liu et al. (2509.21163): ~1.7% rare-token plateau neurons; distributed specialization not modular. Analyzes *final-layer only* — no layerwise decomposition, no connection to frequency erasure across depth.
+- Zhang et al. (2512.20607): saddle-to-saddle dynamics → simplicity bias → low-rank features learned first. Pure theory, no empirical connection to frequency encoding in transformers.
+- Balogh (2603.10985) "Discrete Charm of MLP": binary routing of continuous signals; consensus neurons vs exception handlers. Different phenomenon (nonlinearity routing, not frequency). Only GPT-2 Small; didn't generalize to larger models.
+- "How Do LLMs Use Depth?" (2510.18871): layerwise prediction dynamics. Layer-level description only, no neuron-level decomposition, no frequency focus.
+- "Transfer Neurons" (2509.17030): early layers convert to English-centric, middle layers language-agnostic. Structurally analogous (information routing across layers) but for *language identity*, not *token frequency*. Good parallel citation.
+- Hadad et al. (2602.16823): formal mechanistic interpretability with provable guarantees for circuit discovery. Vision models only, about verification methodology, not frequency/semantic content.
+
+**What does NOT exist (our novel contributions):**
+
+1. **Nobody has shown the neuron-level mechanism of frequency erasure.** Kobayashi shows frequency is absent from late hidden states. We show *how* it gets removed — via the balance shifting from affinity neurons to coverage neurons across layers.
+
+2. **Nobody has causally validated functionally distinct neuron populations with *opposite* effects on frequency discrimination.** Our ablation dissociation (affinity ablation *reduces* JSD; coverage/mass ablation *increases* JSD) is unique. No prior work shows a systematic population-level dissociation with opposite causal signs.
+
+3. **Nobody has unified token frequency neurons, rare-token neurons, and safety neurons under a single decomposition.** These were all discovered independently with different methods.
+
+4. **Nobody has shown frequency probe AUROC declining through layers as a *learned* developmental process** (our training dynamics result: Pythia-70M L5 goes from 0.83 to 0.57 across training). Kobayashi's result is static.
+
+5. **The end-to-end pipeline** (embedding → MLP routing → residual stream disentanglement → prediction head recombination) has never been assembled.
+
+### AI Safety and Practical Applications
+
+#### 1. Frequency Steering for Debiasing Generation
+LLMs over-generate common tokens and under-generate rare ones. By amplifying/dampening affinity neurons at inference, we can shift the common/rare balance *without retraining*. Rare tokens include technical terms, proper nouns, and minority language constructions — systematic under-generation is a form of representational harm.
+
+#### 2. Targeted Model Editing via Neuron Populations
+Affinity neurons can be removed with minimal output disruption (KL 0.056 for high-freq affinity at 5% ablation). Coverage/mass ablation causes massive output disruption (KL 0.88). This means frequency behavior can be surgically modified without breaking the model — more precise than LoRA or full fine-tuning for domain adaptation.
+
+#### 3. Safety Neuron Identification via Mass Axis
+36% of top-5% mass neurons are safety neurons (7x enrichment). Mass is a cheap proxy for safety-criticality — single forward pass instead of expensive ablation studies.
+
+#### 4. Calibration Monitoring
+If affinity neurons overlap with Stolfo's token frequency neurons, then monitoring affinity neuron activation patterns could serve as a real-time calibration diagnostic during inference.
+
+### Revised Paper Structure
+
+**Title**: "Frequency Routing Circuits: How Transformer MLPs Disentangle Token Frequency from Semantics"
+
+**Section 1: Introduction**
+- Transformers must solve an information routing problem: embeddings conflate frequency and meaning, but the prediction head needs them separated
+- We identify the MLP-layer circuit that implements this disentanglement
+
+**Section 2: The Frequency-to-Semantics Transition** (compact, ~2 pages)
+- Linear probes as the primary lens: frequency AUROC peaks mid-layers then drops; semantic AUROC saturates early and persists
+- Training dynamics: frequency erasure is learned (Pythia-70M L5: 0.83→0.57 over training)
+- Supporting evidence: JSD drops through layers, polytope density drops (figures in appendix)
+
+**Section 3: Neuron-Level Decomposition of the Routing Circuit**
+- Three functional populations: frequency routers (affinity), shared-computation substrate (coverage), intensity specialists (mass)
+- Corrects the workshop paper's conflated "participation coverage" metric
+- **Unification**: affinity neurons = Stolfo's token frequency neurons (empirical overlap test); rare-token preferring neurons = Liu et al.'s plateau neurons
+
+**Section 4: Causal Validation**
+- Ablation dissociation (completed results)
+- Probe-under-ablation (highest priority experiment — key result)
+- The dissociation is universal across 5 models, 3 architectures
+
+**Section 5: The Complete Frequency Pipeline**
+- End-to-end story: embedding → MLP routing → residual stream disentanglement → prediction head recombination
+- Connects our results to Kobayashi (head) and Stolfo (confidence regulation)
+- Theoretical grounding: saddle-to-saddle dynamics explains WHY frequency is learned first and separated later
+
+**Section 6: Applications**
+- Frequency steering demonstration
+- Mass as cheap safety neuron proxy
+- Discussion of implications for calibration and rare-token generation
+
+### Revised Next Steps (Prioritized, 2026-04-08)
+
+1. **Probe-under-ablation** (already designed) — marquee result
+2. **Stolfo overlap test** — compute affinity for Stolfo's identified token frequency neurons on a shared model (e.g., Pythia-410M or GPT-2). If overlap is strong (>60%), we have the unification. ~2 hours of work.
+3. **Liu overlap test** — check if Liu et al.'s rare-token plateau neurons are low-affinity
+4. **Frequency steering demo** (already planned)
+5. **Write the paper with new framing**

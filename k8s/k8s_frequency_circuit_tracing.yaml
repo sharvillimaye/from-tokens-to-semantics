@@ -1,10 +1,11 @@
-# Circuit decomposition: frequency direction projections per component (attn vs MLP)
-# THE central experiment — does MLP flip from writing to erasing frequency?
-# All 5 models, all 5 datasets. 1 GPU (inference only).
+# Frequency circuit tracing v2: per-layer frequency directions from probes,
+# component-level (attn vs MLP) and per-neuron decomposition.
+# Fixes the failed circuit_decomposition.py (fixed direction, norm growth).
+# All 5 models, all 5 datasets. 1 GPU (inference + sklearn probes).
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: ani-circuit-decomp
+  name: ani-freq-circuit-tracing
   namespace: oumi-science
 spec:
   backoffLimit: 0
@@ -27,33 +28,42 @@ spec:
         args:
         - |
           set -e
-          rm -rf /root/.cache/huggingface 2>/dev/null || true
 
+          # --- Setup ---
           REPO_DIR=/data/ani/mechinterp/polytope-code
-          rm -rf $REPO_DIR
-          git clone --branch polytope-results --single-branch \
-            https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
+          if [ -d "$REPO_DIR/.git" ]; then
+            cd $REPO_DIR && git fetch origin && git checkout polytope-results && git pull origin polytope-results
+          else
+            rm -rf $REPO_DIR
+            git clone --branch polytope-results --single-branch \
+              https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
+          fi
           cd $REPO_DIR
-          export PYTHONPATH=$REPO_DIR:$REPO_DIR/scripts/metrics:$PYTHONPATH
-          echo "=== Files ===" && ls *.py
-          pip install transformers scipy pandas numpy torch 2>/dev/null
+
+          pip install transformers scipy pandas numpy torch scikit-learn 2>/dev/null
 
           DATASET_DIR=/data/ani/mechinterp/code/scaleJSD/dataset/legacy/filtered
-          OUTPUT_ROOT=/data/ani/mechinterp/runs/circuit
+          if [ ! -d "$DATASET_DIR" ]; then
+            DATASET_DIR=/data/ani/mechinterp/code/scaleJSD/dataset/filtered
+          fi
 
           if [ -f /data/ani/.hf_token ]; then
             export HF_TOKEN=$(cat /data/ani/.hf_token)
           fi
 
+          OUTPUT_ROOT=/data/ani/mechinterp/runs/circuit_v2
+          METRICS_ROOT=/data/ani/mechinterp/runs/participation_coverage
+
           # ============================================================
-          # 1. Pythia-70m (6 layers, fast)
+          # 1. Pythia-70m (6 layers, fast — ~5 min)
           # ============================================================
           echo "=========================================================="
-          echo "  Pythia-70m circuit decomposition — $(date)"
+          echo "  Pythia-70m frequency circuit tracing — $(date)"
           echo "=========================================================="
-          python3 circuit_decomposition.py \
+          python3 -m scripts.interventions.frequency_circuit_tracing \
             --model EleutherAI/pythia-70m-deduped --revision step143000 \
             --all-datasets --dataset-dir ${DATASET_DIR} \
+            --metrics-dir ${METRICS_ROOT}/pythia-70m \
             --output-dir ${OUTPUT_ROOT}/pythia-70m \
             --device cuda
 
@@ -62,11 +72,12 @@ spec:
           # ============================================================
           echo ""
           echo "=========================================================="
-          echo "  OLMo-1B circuit decomposition — $(date)"
+          echo "  OLMo-1B frequency circuit tracing — $(date)"
           echo "=========================================================="
-          python3 circuit_decomposition.py \
+          python3 -m scripts.interventions.frequency_circuit_tracing \
             --model allenai/OLMo-1B-hf --revision main \
             --all-datasets --dataset-dir ${DATASET_DIR} \
+            --metrics-dir ${METRICS_ROOT}/olmo-1b \
             --output-dir ${OUTPUT_ROOT}/olmo-1b \
             --device cuda
 
@@ -75,11 +86,12 @@ spec:
           # ============================================================
           echo ""
           echo "=========================================================="
-          echo "  Pythia-6.9B circuit decomposition — $(date)"
+          echo "  Pythia-6.9B frequency circuit tracing — $(date)"
           echo "=========================================================="
-          python3 circuit_decomposition.py \
+          python3 -m scripts.interventions.frequency_circuit_tracing \
             --model EleutherAI/pythia-6.9b-deduped --revision step143000 \
             --all-datasets --dataset-dir ${DATASET_DIR} \
+            --metrics-dir ${METRICS_ROOT}/pythia-6.9b \
             --output-dir ${OUTPUT_ROOT}/pythia-6.9b \
             --device cuda
 
@@ -88,11 +100,12 @@ spec:
           # ============================================================
           echo ""
           echo "=========================================================="
-          echo "  OLMo-7B circuit decomposition — $(date)"
+          echo "  OLMo-7B frequency circuit tracing — $(date)"
           echo "=========================================================="
-          python3 circuit_decomposition.py \
+          python3 -m scripts.interventions.frequency_circuit_tracing \
             --model allenai/OLMo-7B-hf --revision main \
             --all-datasets --dataset-dir ${DATASET_DIR} \
+            --metrics-dir ${METRICS_ROOT}/olmo-7b \
             --output-dir ${OUTPUT_ROOT}/olmo-7b \
             --device cuda
 
@@ -101,11 +114,12 @@ spec:
           # ============================================================
           echo ""
           echo "=========================================================="
-          echo "  Llama 3.1 8B circuit decomposition — $(date)"
+          echo "  Llama 3.1 8B frequency circuit tracing — $(date)"
           echo "=========================================================="
-          python3 circuit_decomposition.py \
+          python3 -m scripts.interventions.frequency_circuit_tracing \
             --model meta-llama/Llama-3.1-8B --revision main \
             --all-datasets --dataset-dir ${DATASET_DIR} \
+            --metrics-dir ${METRICS_ROOT}/llama-3.1-8b \
             --output-dir ${OUTPUT_ROOT}/llama-3.1-8b \
             --device cuda
 
