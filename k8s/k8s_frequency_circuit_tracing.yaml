@@ -30,7 +30,7 @@ spec:
           set -e
 
           # --- Setup (fresh clone to pick up latest code) ---
-          REPO_DIR=/data/ani/mechinterp/polytope-code
+          REPO_DIR=/data/ani/mechinterp/polytope-code-circuit
           rm -rf $REPO_DIR
           git clone --branch polytope-results --single-branch \
             https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
