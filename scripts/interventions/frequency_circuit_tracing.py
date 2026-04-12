@@ -4,12 +4,6 @@ Frequency circuit tracing: decompose how each transformer component
 (attention, MLP, per-neuron) reads and writes frequency information
 in the residual stream.
 
-Key improvement over the failed circuit_decomposition.py:
-  - Uses PER-LAYER frequency directions from trained linear probes,
-    not a fixed direction from L0 embeddings
-  - The probe weight vector at layer L IS the local frequency direction:
-    the direction that maximally separates high-freq from low-freq
-  - This handles the rotation of the residual stream across layers
 
 For each layer, we capture:
   1. Attention output contribution to residual stream (Δ_attn)
@@ -41,36 +35,34 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import torch
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import GroupShuffleSplit
+import torch
 
 try:
     from scripts.metrics.coverage_affinity_experiment import (
+        _infer_layers,
         load_synonym_pairs,
         pairs_to_samples,
-        _infer_layers,
     )
 except ImportError:
     import sys
+
     sys.path.append(str(Path(__file__).resolve().parents[2]))
     from scripts.metrics.coverage_affinity_experiment import (
+        _infer_layers,
         load_synonym_pairs,
         pairs_to_samples,
-        _infer_layers,
     )
 
-
-# ── Hook classes ─────────────────────────────────────────────────────
 
 class ComponentCapture:
     """Capture attention and MLP contributions to the residual stream separately.
@@ -99,16 +91,20 @@ class ComponentCapture:
 
     def _register_hooks(self, model):
         """Register hooks on attention output, MLP output, and MLP intermediate."""
-        model_name = model.config.model_type if hasattr(model.config, 'model_type') else ''
+        model_name = model.config.model_type if hasattr(model.config, "model_type") else ""
 
         # Find transformer layers
-        if hasattr(model, 'gpt_neox'):
+        if hasattr(model, "gpt_neox"):
             tf_layers = model.gpt_neox.layers
-        elif hasattr(model, 'model') and hasattr(model.model, 'layers'):
+        elif hasattr(model, "model") and hasattr(model.model, "layers"):
             tf_layers = model.model.layers
-        elif hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
+        elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
             tf_layers = model.transformer.h
-        elif hasattr(model, 'model') and hasattr(model.model, 'transformer') and hasattr(model.model.transformer, 'blocks'):
+        elif (
+            hasattr(model, "model")
+            and hasattr(model.model, "transformer")
+            and hasattr(model.model.transformer, "blocks")
+        ):
             tf_layers = model.model.transformer.blocks
         else:
             raise ValueError(f"Cannot find transformer layers for {type(model)}")
@@ -118,41 +114,43 @@ class ComponentCapture:
 
             # Hook on attention output
             attn_module = None
-            for name in ['attention', 'self_attn', 'attn']:
+            for name in ["attention", "self_attn", "attn"]:
                 if hasattr(layer, name):
                     attn_module = getattr(layer, name)
                     break
             if attn_module is not None:
                 h = attn_module.register_forward_hook(
-                    self._make_capture_hook(self.attn_out, layer_idx))
+                    self._make_capture_hook(self.attn_out, layer_idx)
+                )
                 self.hooks.append(h)
 
             # Hook on MLP output
             mlp_module = None
-            for name in ['mlp', 'feed_forward', 'ff']:
+            for name in ["mlp", "feed_forward", "ff"]:
                 if hasattr(layer, name):
                     mlp_module = getattr(layer, name)
                     break
             if mlp_module is not None:
                 h = mlp_module.register_forward_hook(
-                    self._make_capture_hook(self.mlp_out, layer_idx))
+                    self._make_capture_hook(self.mlp_out, layer_idx)
+                )
                 self.hooks.append(h)
 
             # Hook on full layer output (residual stream after this layer)
-            h = layer.register_forward_hook(
-                self._make_capture_hook(self.residual_post, layer_idx))
+            h = layer.register_forward_hook(self._make_capture_hook(self.residual_post, layer_idx))
             self.hooks.append(h)
 
             # Hook on MLP intermediate (post-activation, pre-down_proj)
             down_proj = None
             if mlp_module is not None:
-                for name in ['dense_4h_to_h', 'down_proj', 'c_proj', 'fc2', 'w2']:
+                for name in ["dense_4h_to_h", "down_proj", "c_proj", "fc2", "w2"]:
                     if hasattr(mlp_module, name):
                         down_proj = getattr(mlp_module, name)
                         break
             if down_proj is not None:
                 h = down_proj.register_forward_pre_hook(
-                    self._make_pre_hook(self.mlp_post_act, layer_idx))
+                    self._make_pre_hook(self.mlp_post_act, layer_idx)
+                )
                 self.hooks.append(h)
 
     def _make_capture_hook(self, storage, layer_idx):
@@ -166,6 +164,7 @@ class ComponentCapture:
             for ti in self.token_indices:
                 vec = out[:, ti, :].detach().cpu().float().numpy()
                 storage[layer_idx].append(vec)
+
         return hook
 
     def _make_pre_hook(self, storage, layer_idx):
@@ -174,6 +173,7 @@ class ComponentCapture:
             for ti in self.token_indices:
                 vec = inp[:, ti, :].detach().cpu().float().numpy()
                 storage[layer_idx].append(vec)
+
         return hook
 
     def clear(self):
@@ -190,6 +190,7 @@ class ComponentCapture:
 
 
 # ── Frequency direction computation ─────────────────────────────────
+
 
 def train_frequency_direction(
     X: np.ndarray,
@@ -210,7 +211,7 @@ def train_frequency_direction(
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = freq_labels[train_idx], freq_labels[test_idx]
 
-    clf = LogisticRegression(max_iter=1000, solver='lbfgs', C=1.0)
+    clf = LogisticRegression(max_iter=1000, solver="lbfgs", C=1.0)
     clf.fit(X_train, y_train)
 
     # AUROC
@@ -230,11 +231,12 @@ def train_frequency_direction(
 
 # ── Per-neuron MLP decomposition ────────────────────────────────────
 
+
 def decompose_mlp_by_neuron(
-    post_act: np.ndarray,      # [N_samples, 4H] — post-activation values
+    post_act: np.ndarray,  # [N_samples, 4H] — post-activation values
     down_proj_weight: np.ndarray,  # [H, 4H] — down_proj weight matrix
-    freq_direction: np.ndarray,    # [H] — local frequency direction
-    freq_labels: np.ndarray,       # [N_samples] — 0/1 high/low freq
+    freq_direction: np.ndarray,  # [H] — local frequency direction
+    freq_labels: np.ndarray,  # [N_samples] — 0/1 high/low freq
 ) -> pd.DataFrame:
     """Decompose MLP output into per-neuron contributions projected onto
     the frequency direction.
@@ -263,8 +265,12 @@ def decompose_mlp_by_neuron(
     high_mask = freq_labels == 1
     low_mask = freq_labels == 0
 
-    mean_proj_high = per_sample_proj[high_mask].mean(axis=0) if high_mask.sum() > 0 else np.zeros(four_H)
-    mean_proj_low = per_sample_proj[low_mask].mean(axis=0) if low_mask.sum() > 0 else np.zeros(four_H)
+    mean_proj_high = (
+        per_sample_proj[high_mask].mean(axis=0) if high_mask.sum() > 0 else np.zeros(four_H)
+    )
+    mean_proj_low = (
+        per_sample_proj[low_mask].mean(axis=0) if low_mask.sum() > 0 else np.zeros(four_H)
+    )
     mean_proj_all = per_sample_proj.mean(axis=0)
 
     # The differential projection is what matters for frequency ROUTING:
@@ -278,28 +284,31 @@ def decompose_mlp_by_neuron(
 
     records = []
     for h in range(four_H):
-        records.append({
-            'neuron_idx': h,
-            'freq_alignment': float(neuron_freq_alignment[h]),
-            'mean_proj_high': float(mean_proj_high[h]),
-            'mean_proj_low': float(mean_proj_low[h]),
-            'mean_proj_all': float(mean_proj_all[h]),
-            'diff_proj': float(diff_proj[h]),
-            'abs_diff_proj': float(abs(diff_proj[h])),
-            'mean_act_high': float(mean_act_high[h]),
-            'mean_act_low': float(mean_act_low[h]),
-        })
+        records.append(
+            {
+                "neuron_idx": h,
+                "freq_alignment": float(neuron_freq_alignment[h]),
+                "mean_proj_high": float(mean_proj_high[h]),
+                "mean_proj_low": float(mean_proj_low[h]),
+                "mean_proj_all": float(mean_proj_all[h]),
+                "diff_proj": float(diff_proj[h]),
+                "abs_diff_proj": float(abs(diff_proj[h])),
+                "mean_act_high": float(mean_act_high[h]),
+                "mean_act_low": float(mean_act_low[h]),
+            }
+        )
 
     return pd.DataFrame(records)
 
 
 # ── Component-level frequency flow ──────────────────────────────────
 
+
 def compute_component_freq_flow(
-    attn_out: np.ndarray,    # [N, H]
-    mlp_out: np.ndarray,     # [N, H]
+    attn_out: np.ndarray,  # [N, H]
+    mlp_out: np.ndarray,  # [N, H]
     freq_direction: np.ndarray,  # [H]
-    freq_labels: np.ndarray,     # [N]
+    freq_labels: np.ndarray,  # [N]
 ) -> Dict[str, float]:
     """Project attention and MLP outputs onto frequency direction,
     separately for high-freq and low-freq inputs."""
@@ -308,32 +317,39 @@ def compute_component_freq_flow(
     low_mask = freq_labels == 0
 
     results = {}
-    for name, component in [('attn', attn_out), ('mlp', mlp_out)]:
+    for name, component in [("attn", attn_out), ("mlp", mlp_out)]:
         proj = component @ freq_direction  # [N]
 
-        results[f'{name}_proj_mean'] = float(proj.mean())
-        results[f'{name}_proj_high'] = float(proj[high_mask].mean()) if high_mask.sum() > 0 else 0.0
-        results[f'{name}_proj_low'] = float(proj[low_mask].mean()) if low_mask.sum() > 0 else 0.0
-        results[f'{name}_proj_diff'] = results[f'{name}_proj_high'] - results[f'{name}_proj_low']
-        results[f'{name}_proj_abs_diff'] = abs(results[f'{name}_proj_diff'])
-        results[f'{name}_proj_std'] = float(proj.std())
+        results[f"{name}_proj_mean"] = float(proj.mean())
+        results[f"{name}_proj_high"] = (
+            float(proj[high_mask].mean()) if high_mask.sum() > 0 else 0.0
+        )
+        results[f"{name}_proj_low"] = float(proj[low_mask].mean()) if low_mask.sum() > 0 else 0.0
+        results[f"{name}_proj_diff"] = results[f"{name}_proj_high"] - results[f"{name}_proj_low"]
+        results[f"{name}_proj_abs_diff"] = abs(results[f"{name}_proj_diff"])
+        results[f"{name}_proj_std"] = float(proj.std())
 
     # Combined: total contribution
     total = attn_out + mlp_out
     proj_total = total @ freq_direction
-    results['total_proj_diff'] = float(proj_total[high_mask].mean() - proj_total[low_mask].mean()) if (high_mask.sum() > 0 and low_mask.sum() > 0) else 0.0
+    results["total_proj_diff"] = (
+        float(proj_total[high_mask].mean() - proj_total[low_mask].mean())
+        if (high_mask.sum() > 0 and low_mask.sum() > 0)
+        else 0.0
+    )
 
     # Fraction of frequency info from MLP vs attention
-    attn_diff = abs(results['attn_proj_diff'])
-    mlp_diff = abs(results['mlp_proj_diff'])
+    attn_diff = abs(results["attn_proj_diff"])
+    mlp_diff = abs(results["mlp_proj_diff"])
     total_diff = attn_diff + mlp_diff + 1e-12
-    results['mlp_freq_fraction'] = float(mlp_diff / total_diff)
-    results['attn_freq_fraction'] = float(attn_diff / total_diff)
+    results["mlp_freq_fraction"] = float(mlp_diff / total_diff)
+    results["attn_freq_fraction"] = float(attn_diff / total_diff)
 
     return results
 
 
 # ── Main experiment ──────────────────────────────────────────────────
+
 
 def run_circuit_tracing(
     model_id: str,
@@ -341,26 +357,27 @@ def run_circuit_tracing(
     dataset_path: str,
     metrics_dir: Optional[str],
     output_dir: str,
-    device: str = 'cuda',
+    device: str = "cuda",
 ):
     """Run frequency circuit tracing for one model + one dataset."""
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     os.makedirs(output_dir, exist_ok=True)
-    dataset_name = Path(dataset_path).stem.replace('_ngrams_dedup_filtered', '')
+    dataset_name = Path(dataset_path).stem.replace("_ngrams_dedup_filtered", "")
 
     print(f"  Loading model {model_id} (revision={revision})...")
     tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, revision=revision,
+        model_id,
+        revision=revision,
         torch_dtype=torch.float32,
         device_map=device,
     )
     model.eval()
 
-    n_layers = _infer_layers(model_id)
-    all_layers = list(range(n_layers))
+    all_layers = _infer_layers(model_id)
+    n_layers = len(all_layers)
 
     # Load data
     print(f"  Loading dataset {dataset_path}...")
@@ -372,10 +389,10 @@ def run_circuit_tracing(
         return
 
     # Prepare inputs
-    token_ids_list = [s['token_ids'] for s in samples]
-    anchor_positions = [s['anchor_position'] for s in samples]
-    freq_labels = np.array([1 if s['frequency'] == 'high' else 0 for s in samples])
-    pair_ids = np.array([s['pair_id'] for s in samples])
+    token_ids_list = [s["token_ids"] for s in samples]
+    anchor_positions = [s["anchor_position"] for s in samples]
+    freq_labels = np.array([1 if s["frequency"] == "high" else 0 for s in samples])
+    pair_ids = np.array([s["pair_id"] for s in samples])
 
     # Set up hooks
     capture = ComponentCapture(model, all_layers, token_indices=[])
@@ -392,8 +409,8 @@ def run_circuit_tracing(
 
     # We need to capture per-sample because anchor positions differ
     for i, sample in enumerate(samples):
-        input_ids = torch.tensor([sample['token_ids']], device=device)
-        anchor_pos = sample['anchor_position']
+        input_ids = torch.tensor([sample["token_ids"]], device=device)
+        anchor_pos = sample["anchor_position"]
 
         # Register hooks for this forward pass
         cap = ComponentCapture(model, all_layers, token_indices=[anchor_pos])
@@ -414,7 +431,7 @@ def run_circuit_tracing(
         cap.remove_hooks()
 
         if (i + 1) % 50 == 0:
-            print(f"    {i+1}/{len(samples)} samples processed")
+            print(f"    {i + 1}/{len(samples)} samples processed")
 
     # Stack into arrays
     for l in all_layers:
@@ -426,13 +443,13 @@ def run_circuit_tracing(
     # Get down_proj weights for per-neuron decomposition
     print("  Extracting down_proj weights...")
     down_proj_weights = {}
-    if hasattr(model, 'gpt_neox'):
+    if hasattr(model, "gpt_neox"):
         tf_layers = model.gpt_neox.layers
-    elif hasattr(model, 'model') and hasattr(model.model, 'layers'):
+    elif hasattr(model, "model") and hasattr(model.model, "layers"):
         tf_layers = model.model.layers
-    elif hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
+    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
         tf_layers = model.transformer.h
-    elif hasattr(model, 'model') and hasattr(model.model, 'transformer'):
+    elif hasattr(model, "model") and hasattr(model.model, "transformer"):
         tf_layers = model.model.transformer.blocks
     else:
         tf_layers = None
@@ -441,12 +458,12 @@ def run_circuit_tracing(
         for l in all_layers:
             layer = tf_layers[l]
             mlp_module = None
-            for name in ['mlp', 'feed_forward', 'ff']:
+            for name in ["mlp", "feed_forward", "ff"]:
                 if hasattr(layer, name):
                     mlp_module = getattr(layer, name)
                     break
             if mlp_module is not None:
-                for name in ['dense_4h_to_h', 'down_proj', 'c_proj', 'fc2', 'w2']:
+                for name in ["dense_4h_to_h", "down_proj", "c_proj", "fc2", "w2"]:
                     if hasattr(mlp_module, name):
                         W = getattr(mlp_module, name).weight.detach().cpu().float().numpy()
                         down_proj_weights[l] = W  # [H, 4H]
@@ -455,7 +472,7 @@ def run_circuit_tracing(
     # Load neuron metrics for cross-referencing (if available)
     neuron_metrics = None
     if metrics_dir:
-        metrics_path = Path(metrics_dir) / dataset_name / 'neuron_metrics.csv'
+        metrics_path = Path(metrics_dir) / dataset_name / "neuron_metrics.csv"
         if metrics_path.exists():
             print(f"  Loading neuron metrics from {metrics_path}...")
             neuron_metrics = pd.read_csv(metrics_path)
@@ -476,45 +493,62 @@ def run_circuit_tracing(
         # Train frequency probe → get local frequency direction
         freq_dir, probe_auroc = train_frequency_direction(X, freq_labels, pair_ids)
 
-        freq_dir_rows.append({
-            'layer': l,
-            'probe_auroc': probe_auroc,
-            'freq_dir_norm': float(np.linalg.norm(freq_dir)),
-            'freq_dir_mean': float(freq_dir.mean()),
-            'freq_dir_std': float(freq_dir.std()),
-        })
+        freq_dir_rows.append(
+            {
+                "layer": l,
+                "probe_auroc": probe_auroc,
+                "freq_dir_norm": float(np.linalg.norm(freq_dir)),
+                "freq_dir_mean": float(freq_dir.mean()),
+                "freq_dir_std": float(freq_dir.std()),
+            }
+        )
 
         # Component-level frequency flow
         if attn_outs[l] is not None and mlp_outs[l] is not None:
-            flow = compute_component_freq_flow(
-                attn_outs[l], mlp_outs[l], freq_dir, freq_labels)
-            flow['layer'] = l
-            flow['probe_auroc'] = probe_auroc
+            flow = compute_component_freq_flow(attn_outs[l], mlp_outs[l], freq_dir, freq_labels)
+            flow["layer"] = l
+            flow["probe_auroc"] = probe_auroc
             component_rows.append(flow)
 
         # Per-neuron MLP decomposition
         if mlp_post_acts[l] is not None and l in down_proj_weights:
             neuron_df = decompose_mlp_by_neuron(
-                mlp_post_acts[l], down_proj_weights[l], freq_dir, freq_labels)
-            neuron_df['layer'] = l
+                mlp_post_acts[l], down_proj_weights[l], freq_dir, freq_labels
+            )
+            neuron_df["layer"] = l
 
             # Cross-reference with axes if available
             if neuron_metrics is not None:
-                layer_metrics = neuron_metrics[neuron_metrics['layer'] == l].copy()
-                if len(layer_metrics) > 0 and 'neuron_idx' in layer_metrics.columns:
+                layer_metrics = neuron_metrics[neuron_metrics["layer"] == l].copy()
+                if len(layer_metrics) > 0 and "neuron_idx" in layer_metrics.columns:
                     neuron_df = neuron_df.merge(
-                        layer_metrics[['neuron_idx', 'binary_coverage', 'raw_mass_total',
-                                      'frequency_affinity', 'jsd_contrib']].rename(
-                            columns={'binary_coverage': 'coverage',
-                                    'raw_mass_total': 'mass',
-                                    'frequency_affinity': 'affinity'}),
-                        on='neuron_idx', how='left')
+                        layer_metrics[
+                            [
+                                "neuron_idx",
+                                "binary_coverage",
+                                "raw_mass_total",
+                                "frequency_affinity",
+                                "jsd_contrib",
+                            ]
+                        ].rename(
+                            columns={
+                                "binary_coverage": "coverage",
+                                "raw_mass_total": "mass",
+                                "frequency_affinity": "affinity",
+                            }
+                        ),
+                        on="neuron_idx",
+                        how="left",
+                    )
 
             all_neuron_rows.append(neuron_df)
 
-        print(f"    Layer {l}: probe AUROC={probe_auroc:.3f}, "
-              f"MLP freq fraction={flow.get('mlp_freq_fraction', 0):.3f}"
-              if flow else f"    Layer {l}: probe AUROC={probe_auroc:.3f}")
+        print(
+            f"    Layer {l}: probe AUROC={probe_auroc:.3f}, "
+            f"MLP freq fraction={flow.get('mlp_freq_fraction', 0):.3f}"
+            if flow
+            else f"    Layer {l}: probe AUROC={probe_auroc:.3f}"
+        )
 
     # ── Save results ──
     print(f"  Saving results to {output_dir}...")
@@ -522,38 +556,38 @@ def run_circuit_tracing(
     # Component flow
     if component_rows:
         comp_df = pd.DataFrame(component_rows)
-        comp_df['dataset'] = dataset_name
-        comp_path = os.path.join(output_dir, f'{dataset_name}_component_freq_flow.csv')
+        comp_df["dataset"] = dataset_name
+        comp_path = os.path.join(output_dir, f"{dataset_name}_component_freq_flow.csv")
         comp_df.to_csv(comp_path, index=False)
         print(f"    Saved {comp_path} ({len(comp_df)} rows)")
 
     # Frequency directions
     if freq_dir_rows:
         fd_df = pd.DataFrame(freq_dir_rows)
-        fd_df['dataset'] = dataset_name
-        fd_path = os.path.join(output_dir, f'{dataset_name}_freq_directions.csv')
+        fd_df["dataset"] = dataset_name
+        fd_path = os.path.join(output_dir, f"{dataset_name}_freq_directions.csv")
         fd_df.to_csv(fd_path, index=False)
 
     # Per-neuron projections
     if all_neuron_rows:
         neuron_full = pd.concat(all_neuron_rows, ignore_index=True)
-        neuron_full['dataset'] = dataset_name
-        neuron_path = os.path.join(output_dir, f'{dataset_name}_neuron_freq_projections.csv')
+        neuron_full["dataset"] = dataset_name
+        neuron_path = os.path.join(output_dir, f"{dataset_name}_neuron_freq_projections.csv")
         neuron_full.to_csv(neuron_path, index=False)
         print(f"    Saved {neuron_path} ({len(neuron_full)} rows)")
 
     # Summary
     summary = {
-        'model': model_id,
-        'revision': revision,
-        'dataset': dataset_name,
-        'n_samples': len(samples),
-        'n_layers': n_layers,
-        'component_flow': component_rows,
-        'freq_directions': freq_dir_rows,
+        "model": model_id,
+        "revision": revision,
+        "dataset": dataset_name,
+        "n_samples": len(samples),
+        "n_layers": n_layers,
+        "component_flow": component_rows,
+        "freq_directions": freq_dir_rows,
     }
-    summary_path = os.path.join(output_dir, f'{dataset_name}_summary.json')
-    with open(summary_path, 'w') as f:
+    summary_path = os.path.join(output_dir, f"{dataset_name}_summary.json")
+    with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2, default=str)
 
     # Cleanup
@@ -566,27 +600,33 @@ def run_circuit_tracing(
 # ── CLI ──────────────────────────────────────────────────────────────
 
 DATASET_FILES = {
-    'emotion': 'emotion_ngrams_dedup_filtered.jsonl',
-    'medical': 'medical_ngrams_dedup_filtered.jsonl',
-    'legal': 'legal_ngrams_dedup_filtered.jsonl',
-    'scientific': 'scientific_ngrams_dedup_filtered.jsonl',
-    'verb': 'verb_ngrams_dedup_filtered.jsonl',
+    "emotion": "emotion_ngrams_dedup_filtered.jsonl",
+    "medical": "medical_ngrams_dedup_filtered.jsonl",
+    "legal": "legal_ngrams_dedup_filtered.jsonl",
+    "scientific": "scientific_ngrams_dedup_filtered.jsonl",
+    "verb": "verb_ngrams_dedup_filtered.jsonl",
 }
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Frequency circuit tracing')
-    parser.add_argument('--model', required=True)
-    parser.add_argument('--revision', default='main')
-    parser.add_argument('--dataset', type=str, default=None,
-                       help='Path to specific dataset JSONL')
-    parser.add_argument('--all-datasets', action='store_true',
-                       help='Run on all 5 ScaleJSD datasets')
-    parser.add_argument('--dataset-dir', type=str, default=None,
-                       help='Directory containing dataset JSONLs')
-    parser.add_argument('--metrics-dir', type=str, default=None,
-                       help='Directory containing neuron_metrics.csv files')
-    parser.add_argument('--output-dir', required=True)
-    parser.add_argument('--device', default='cuda')
+    parser = argparse.ArgumentParser(description="Frequency circuit tracing")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--revision", default="main")
+    parser.add_argument("--dataset", type=str, default=None, help="Path to specific dataset JSONL")
+    parser.add_argument(
+        "--all-datasets", action="store_true", help="Run on all 5 ScaleJSD datasets"
+    )
+    parser.add_argument(
+        "--dataset-dir", type=str, default=None, help="Directory containing dataset JSONLs"
+    )
+    parser.add_argument(
+        "--metrics-dir",
+        type=str,
+        default=None,
+        help="Directory containing neuron_metrics.csv files",
+    )
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
 
     if args.all_datasets:
@@ -609,10 +649,10 @@ def main():
     print()
 
     for ds_path in datasets:
-        ds_name = Path(ds_path).stem.replace('_ngrams_dedup_filtered', '')
-        print(f"{'='*60}")
+        ds_name = Path(ds_path).stem.replace("_ngrams_dedup_filtered", "")
+        print(f"{'=' * 60}")
         print(f"  Dataset: {ds_name}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         metrics_subdir = None
         if args.metrics_dir:
@@ -633,5 +673,5 @@ def main():
     print("Done!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
