@@ -1,0 +1,131 @@
+# Subspace ablation: project out frequency direction from residual
+# stream, measure probe AUROC downstream. THE positive test for the
+# distributed/superposition hypothesis.
+#   Variant A: single-layer ablation at L, probe at all layers
+#   Variant B: cumulative ablation from L onward
+#   Ranks 1, 2, 4, 8 (rank-1 = probe direction; higher = SVD of residual diff)
+#   Random-direction baseline for sanity check
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ani-subspace-ablation
+  namespace: oumi-science
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker-gpu-8x-h100-sxm5gdr-zjdfj-5pk5t
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      restartPolicy: Never
+      containers:
+      - name: runner
+        image: ghcr.io/oumi-ai/oumi:latest
+        securityContext:
+          runAsUser: 0
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -e
+
+          REPO_DIR=/data/ani/mechinterp/polytope-code-subspace
+          rm -rf $REPO_DIR
+          git clone --branch polytope-results --single-branch \
+            https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
+          cd $REPO_DIR
+          export PYTHONPATH=$REPO_DIR:$PYTHONPATH
+          echo "=== Verifying module exists ==="
+          ls -la scripts/interventions/subspace_ablation.py
+
+          pip install transformers scipy pandas numpy torch scikit-learn > /dev/null 2>&1
+
+          DATASET_DIR=/data/ani/mechinterp/code/scaleJSD/dataset/legacy/filtered
+          if [ ! -d "$DATASET_DIR" ]; then
+            DATASET_DIR=/data/ani/mechinterp/code/scaleJSD/dataset/filtered
+          fi
+
+          if [ -f /data/ani/.hf_token ]; then
+            export HF_TOKEN=$(cat /data/ani/.hf_token)
+          fi
+
+          OUTPUT_ROOT=/data/ani/mechinterp/runs/subspace_ablation
+
+          # ============================================================
+          # Pythia-70M (6 layers, fast sanity check)
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  Pythia-70m subspace ablation — $(date)"
+          echo "=========================================================="
+          python3 -m scripts.interventions.subspace_ablation \
+            --model EleutherAI/pythia-70m-deduped --revision step143000 \
+            --dataset-dir ${DATASET_DIR} \
+            --output-dir ${OUTPUT_ROOT}/pythia-70m \
+            --ablate-layers 0,1,2,3,4,5 \
+            --ranks 1,2,4,8 \
+            --run-cumulative \
+            --run-random-baseline \
+            --device cuda
+
+          # ============================================================
+          # OLMo-1B (16 layers)
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  OLMo-1B subspace ablation — $(date)"
+          echo "=========================================================="
+          python3 -m scripts.interventions.subspace_ablation \
+            --model allenai/OLMo-1B-hf --revision main \
+            --dataset-dir ${DATASET_DIR} \
+            --output-dir ${OUTPUT_ROOT}/olmo-1b \
+            --ablate-layers 0,3,7,10,13,15 \
+            --ranks 1,2,4,8 \
+            --run-cumulative \
+            --run-random-baseline \
+            --device cuda
+
+          # ============================================================
+          # Pythia-6.9B (32 layers) — main model
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  Pythia-6.9B subspace ablation — $(date)"
+          echo "=========================================================="
+          python3 -m scripts.interventions.subspace_ablation \
+            --model EleutherAI/pythia-6.9b-deduped --revision step143000 \
+            --dataset-dir ${DATASET_DIR} \
+            --output-dir ${OUTPUT_ROOT}/pythia-6.9b \
+            --ablate-layers 0,5,10,15,20,25,30,31 \
+            --ranks 1,2,4,8 \
+            --run-cumulative \
+            --run-random-baseline \
+            --device cuda
+
+          echo ""
+          echo "=========================================================="
+          echo "  ALL DONE — $(date)"
+          echo "=========================================================="
+          find $OUTPUT_ROOT -name "*.csv" -o -name "*.json" | sort
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+            cpu: "8"
+            memory: "64Gi"
+            ephemeral-storage: "20Gi"
+          limits:
+            nvidia.com/gpu: 1
+            cpu: "16"
+            memory: "128Gi"
+            ephemeral-storage: "80Gi"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+          readOnly: false
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: pvc-oumi-science
