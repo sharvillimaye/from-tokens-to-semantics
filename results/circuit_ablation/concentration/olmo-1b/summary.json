@@ -1,0 +1,11 @@
+{
+  "model": "olmo-1b",
+  "n_neurons_total": 8192,
+  "n_layers": 16,
+  "n_datasets": 5,
+  "mean_top1pct_mass": 0.1266111089634318,
+  "mean_top5pct_mass": 0.25060447852023754,
+  "mean_top10pct_mass": 0.3496417479184988,
+  "mean_jaccard_pct5": 0.07143663985938822,
+  "mean_jaccard_pct1": 0.07935081250668169
+}

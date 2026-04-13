@@ -1,0 +1,11 @@
+{
+  "model": "pythia-70m",
+  "n_neurons_total": 2048,
+  "n_layers": 6,
+  "n_datasets": 5,
+  "mean_top1pct_mass": 0.08827210045289867,
+  "mean_top5pct_mass": 0.23587707501409613,
+  "mean_top10pct_mass": 0.3541096425832632,
+  "mean_jaccard_pct5": 0.07723459710139645,
+  "mean_jaccard_pct1": 0.052370220133378026
+}
