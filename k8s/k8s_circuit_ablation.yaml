@@ -1,0 +1,147 @@
+# Circuit-based ablation: test whether ablating top-k neurons by
+# frequency projection (from circuit tracing) drops frequency probe
+# AUROC more than random/coverage/mass selection.
+# This is the proper causal test of the frequency routing circuit.
+# Stronger percentages (5, 10, 25, 50) across multiple models.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ani-circuit-ablation
+  namespace: oumi-science
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker-gpu-8x-h100-sxm5gdr-zjdfj-5pk5t
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      restartPolicy: Never
+      containers:
+      - name: runner
+        image: ghcr.io/oumi-ai/oumi:latest
+        securityContext:
+          runAsUser: 0
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -e
+
+          REPO_DIR=/data/ani/mechinterp/polytope-code-circabl
+          rm -rf $REPO_DIR
+          git clone --branch polytope-results --single-branch \
+            https://github.com/sharvillimaye/from-tokens-to-semantics.git $REPO_DIR
+          cd $REPO_DIR
+          export PYTHONPATH=$REPO_DIR:$PYTHONPATH
+          echo "=== Verifying module exists ==="
+          ls -la scripts/interventions/circuit_ablation.py
+
+          pip install transformers scipy pandas numpy torch scikit-learn > /dev/null 2>&1
+
+          DATASET_DIR=/data/ani/mechinterp/code/scaleJSD/dataset/legacy/filtered
+          if [ ! -d "$DATASET_DIR" ]; then
+            DATASET_DIR=/data/ani/mechinterp/code/scaleJSD/dataset/filtered
+          fi
+
+          if [ -f /data/ani/.hf_token ]; then
+            export HF_TOKEN=$(cat /data/ani/.hf_token)
+          fi
+
+          CIRCUIT_ROOT=/data/ani/mechinterp/runs/circuit_v2
+          OUTPUT_ROOT=/data/ani/mechinterp/runs/circuit_ablation
+
+          # ============================================================
+          # First: analyze concentration on all models we have data for
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  Circuit concentration analysis — $(date)"
+          echo "=========================================================="
+          for model in pythia-70m pythia-6.9b olmo-1b; do
+            if [ -d "${CIRCUIT_ROOT}/${model}" ]; then
+              echo "--- ${model} ---"
+              python3 -m scripts.plots.analyze_circuit_concentration \
+                --circuit-dir ${CIRCUIT_ROOT}/${model} \
+                --model-name ${model} \
+                --output-dir ${OUTPUT_ROOT}/concentration/${model}
+            fi
+          done
+
+          # ============================================================
+          # Pythia-6.9B circuit ablation (primary experiment)
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  Pythia-6.9B circuit ablation — $(date)"
+          echo "=========================================================="
+          python3 -m scripts.interventions.circuit_ablation \
+            --model EleutherAI/pythia-6.9b-deduped --revision step143000 \
+            --dataset-dir ${DATASET_DIR} \
+            --circuit-dir ${CIRCUIT_ROOT}/pythia-6.9b \
+            --output-dir ${OUTPUT_ROOT}/pythia-6.9b \
+            --ablate-layers 22,23,24,25,26,27,28,29,30,31 \
+            --ablate-pct 5,10,25,50 \
+            --n-random-seeds 3 \
+            --device cuda
+
+          # ============================================================
+          # OLMo-1B circuit ablation
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  OLMo-1B circuit ablation — $(date)"
+          echo "=========================================================="
+          python3 -m scripts.interventions.circuit_ablation \
+            --model allenai/OLMo-1B-hf --revision main \
+            --dataset-dir ${DATASET_DIR} \
+            --circuit-dir ${CIRCUIT_ROOT}/olmo-1b \
+            --output-dir ${OUTPUT_ROOT}/olmo-1b \
+            --ablate-layers 11,12,13,14,15 \
+            --ablate-pct 5,10,25,50 \
+            --n-random-seeds 3 \
+            --device cuda
+
+          # ============================================================
+          # Pythia-70M circuit ablation (smaller, sanity check)
+          # ============================================================
+          echo ""
+          echo "=========================================================="
+          echo "  Pythia-70M circuit ablation — $(date)"
+          echo "=========================================================="
+          python3 -m scripts.interventions.circuit_ablation \
+            --model EleutherAI/pythia-70m-deduped --revision step143000 \
+            --dataset-dir ${DATASET_DIR} \
+            --circuit-dir ${CIRCUIT_ROOT}/pythia-70m \
+            --output-dir ${OUTPUT_ROOT}/pythia-70m \
+            --ablate-layers 4,5 \
+            --ablate-pct 5,10,25,50 \
+            --n-random-seeds 3 \
+            --device cuda
+
+          echo ""
+          echo "=========================================================="
+          echo "  ALL DONE — $(date)"
+          echo "=========================================================="
+          find $OUTPUT_ROOT -name "*.csv" -o -name "*.json" | sort
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+            cpu: "8"
+            memory: "64Gi"
+            ephemeral-storage: "20Gi"
+          limits:
+            nvidia.com/gpu: 1
+            cpu: "16"
+            memory: "128Gi"
+            ephemeral-storage: "80Gi"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+          readOnly: false
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: pvc-oumi-science
