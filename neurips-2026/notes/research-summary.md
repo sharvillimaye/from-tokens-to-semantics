@@ -181,55 +181,205 @@ We have characterized the **representation** (1D direction, distributed writers,
 
 ---
 
-## 5. Literature Findings (in progress)
+## 5. Literature Synthesis
 
-*Four subagents currently searching alphaxiv for:*
-- *A. Circuit tracing methodology — IOI, docstring, path patching, SAE-based circuits*
-- *B. Feature-as-direction literature — INLP, LEACE, amnesic probing, refusal/truth/day-month*
-- *C. Frequency-in-LLMs prior work — Kobayashi, Puccetti, Macocco, Brinkman, training dynamics*
-- *D. Feature entanglement / orthogonality — superposition, feature interactions, hierarchical reps*
+Synthesis of four parallel alphaxiv literature reviews (60+ papers across four areas, completed 2026-04-15). The detailed reviews are in `/tmp/agent_outputs/*.md` (not committed — reproducible via the review prompts in git history).
 
-*Results will be synthesized into §6 once agents return.*
+### 5.1 What's established (and what's NOT novel in our work)
+
+**Methodology**: The pipeline of train-a-linear-probe → use-weight-vector-as-direction → project-out-from-residuals is known as **INLP** (Ravfogel 2020, arXiv:2004.07667), refined by **RLACE** (Ravfogel 2022, arXiv:2201.12091) and **LEACE** (Belrose 2023, arXiv:2306.03819). Amnesic probing (Elazar 2021) applies this per-layer. LEACE proves rank-1 sufficiency is mathematically guaranteed for any scalar/binary concept with different class-conditional means. Our probe-direction ablation at the ablated layer is therefore a mathematical tautology, not an empirical discovery.
+
+**Features-as-directions**: Established by Elhage et al. 2022 "Toy Models of Superposition" (arXiv:2209.10652) and confirmed empirically by Arditi et al. 2024 "Refusal direction" (arXiv:2406.11717), Marks & Tegmark 2023 "Truth direction" (arXiv:2310.06824), Engels et al. 2024 "Not all features are linear" (arXiv:2405.14860), Park et al. 2023 "Linear Representation Hypothesis" (arXiv:2311.03658). Our finding that frequency = 1D direction is an instantiation of a well-established principle.
+
+**Frequency in LMs (partial prior work, five separate findings)**:
+- Kobayashi et al. 2023 (arXiv:2305.18294) — b_LN in prediction head encodes frequency direction in output space; Spearman ρ ≈ 0.78 with log-freq; hidden states orthogonal to b_LN (cos ≈ 0.08).
+- Puccetti et al. 2022 (arXiv:2205.11380) — LayerNorm outlier dimensions correlate with token frequency; removing harms rare-token prediction.
+- Macocco et al. 2025 (arXiv:2503.21718) — Last-layer outlier dimensions implement a "frequent-word heuristic"; counterbalanced when context demands rare tokens.
+- Stolfo/Wu et al. 2024 (arXiv:2406.16254) — MLP "token frequency neurons" with output weights that push logits proportional to log-frequency; also "entropy neurons" that use the LayerNorm-mediated null space.
+- Mu & Viswanath 2018 — Top PCs of static embeddings encode frequency; removing them improves isotropy.
+
+**Training dynamics**: Chang & Bergen 2021 (arXiv:2110.02406) — models learn unigram distribution first, then bigrams, then context. Zhang, Saxe & Latham 2025 (arXiv:2512.20607) — saddle-to-saddle dynamics give a theoretical grounding: simplicity bias learns frequency-like features first.
+
+**Entanglement and causal orthogonality**: Park et al. 2024 "Geometry of Categorical Concepts" (arXiv:2406.01506) proves causally separable concepts are orthogonal under the causal inner product. Wollschlager et al. 2025 "Geometry of Refusal" (arXiv:2502.17420) — refusal is mediated by multi-dimensional cones, not single direction. Introduces "representational independence" criterion, stricter than orthogonality.
+
+**Circuit tracing methodology**: Wang et al. 2023 IOI (arXiv:2211.00593) is the gold standard — 26-head circuit with 7 functional head classes. Conmy et al. 2023 ACDC (arXiv:2304.14997) automates this. Zhang & Nanda 2023 (arXiv:2309.16042) provides best practices. Dunefsky et al. 2024 transcoders (arXiv:2406.11944) enable input-invariant MLP decomposition. Syed et al. 2023 attribution patching scales to large models.
+
+### 5.2 What IS genuinely novel in our work (the defensible claims)
+
+Based on cross-referencing 60+ papers, four aspects of our work do not appear in prior literature:
+
+**1. Direct neuron-vs-direction contrast for the same concept.** Every direction-intervention paper (Arditi, Marks, Engels) implicitly assumes neuron ablation would fail and jumps straight to direction ablation. No paper has published the clean head-to-head: "we ablated 5-50% of neurons selected by every reasonable criterion (coverage, mass, affinity, |diff_proj|, random) and got 0.000-0.007 AUROC change; we ablated 1/d_model dimensions via rank-1 projection and got a 50-point crash." This is empirically novel even though theoretically expected.
+
+**2. Downstream non-recovery dynamics.** LEACE proves the ablated layer itself must lose linear decodability; it says nothing about downstream layers. Our observation that L16 crashes to below-chance AUROC and then partially recovers to 0.75 by L31 after a single-layer ablation at L15 is NOT guaranteed by any theory. The recovery curve encodes information about frequency re-writers. Arditi applies ablation at all layers simultaneously and cannot observe recovery; LEACE concept scrubbing does the same. Our single-layer + downstream-probe protocol is a genuinely new observation.
+
+**3. Decoupling between residual-stream frequency and output behavior.** Cumulative ablation across all late layers crashes probe AUROC (0.92 → 0.30) while output KL stays at 0.001-0.025. This is evidence for **two independent frequency pathways**: the residual-stream direction (which we ablate) and the prediction-head b_LN (which we don't). Agent C (frequency literature) notes that no prior paper has connected b_LN, outlier dimensions, and residual-stream frequency as potentially distinct pathways.
+
+**4. Potential to unify five independent frequency findings.** Agent C identified that prior literature has found at least five separate frequency encodings — Kobayashi's b_LN, Puccetti's outlier dimensions, Macocco's last-layer outliers, Stolfo's token-frequency neurons, and now our residual-stream direction — and **no one has checked whether they are the same direction**. If they align via a single measurement pipeline, we unify five findings into one. If they don't align, we reveal that frequency has multiple representational pathways.
+
+### 5.3 The most important gap in existing work
+
+Across all four agent reviews, the most striking and consistent gap is: **nobody has traced the per-component attribution of a probe-identified direction**. Todd et al. 2024 "Function Vectors" come closest — they trace function vectors to specific attention heads — but for frequency (or any static feature direction), no paper has decomposed which heads and MLPs contribute to the direction at each layer. This is exactly the "who writes what" question we need to answer.
+
+The residual stream at layer L is an additive sum: `x_L = x_0 + Σ attn_outs + Σ mlp_outs`. Projecting onto the frequency direction is linear, so we can exactly attribute the projection: `proj(x_L, v_L) = proj(x_0, v_L) + Σ proj(attn_out_i, v_L) + Σ proj(mlp_out_j, v_L)`. Per-head via z_h @ W_O[L,h].
+
+No existing paper does this decomposition for a probe-identified direction. Doing it for frequency across 5 models is a novel contribution.
 
 ---
 
-## 6. Proposed Next Experiments (to be firmed up from literature findings)
+## 6. Prioritized Research Directions
 
-Working candidates, ordered by current confidence:
+Based on the literature synthesis, five directions ranked by novelty × feasibility:
 
-### 6.1 Per-head signed frequency decomposition (highest priority)
-Using TransformerLens or raw hooks on Pythia-6.9B:
-- For each attention head h at layer L, compute its contribution to the residual stream via z_h @ W_O[L,h].
-- Project each head's contribution onto the frequency direction v_L (trained probe weights at L).
-- Separately for high-freq vs low-freq inputs.
-- Signed differential per head = identifies "frequency writer heads" (positive differential) and "frequency eraser heads" (negative).
-- Attention pattern analysis: do the frequency heads attend to the target token position?
+### Direction 1 — **Unify the five frequency findings** (HIGHEST NOVELTY, HIGHEST FEASIBILITY)
 
-This is the IOI-style decomposition applied to frequency. Expected outcome: a small number of early-layer heads that read token identity and route it into the frequency direction.
+**Question**: Are Kobayashi's b_LN, Puccetti's outlier dimensions, Macocco's last-layer outliers, Stolfo's token-frequency-neuron output weights, and our residual-stream 1D direction all manifestations of the same underlying direction, or are they distinct pathways?
 
-### 6.2 Signed MLP writer/eraser trajectory
-Fix `compute_component_freq_flow` to report signed `mlp_proj_diff` not absolute. Re-run on all 5 models. Identify which layers are writers (positive differential) vs erasers (negative differential). Tentatively predict: early-mid layers are writers, late layers are erasers.
+**Why novel**: Agent C confirms this has not been done. Five papers describe frequency from five angles; their relationship is completely uncharacterized.
 
-### 6.3 Frequency-semantics geometric relationship
-- Train one-vs-rest semantic probes per layer per domain (5 domains). Get 5 semantic directions per layer.
-- Compute cosine similarity matrix: freq direction vs each semantic direction, and semantic directions vs each other.
-- Hypothesis: freq direction is near-orthogonal to semantic directions (otherwise synonyms with different freq couldn't be semantically consolidated).
-- Test: does subspace ablation of freq direction affect semantic probe AUROC? Predict no — if orthogonal, ablation shouldn't interfere.
+**Method**:
+1. For a shared model (Pythia-6.9B or GPT-2), extract each of the five known frequency-related vectors:
+   - b_LN bias parameter (Kobayashi)
+   - Top outlier dimensions by hidden-state magnitude (Puccetti method)
+   - Last-layer outlier dimensions (Macocco method)
+   - Stolfo's v_freq vector derived from their token-frequency neurons (they publish the identification procedure)
+   - Our probe weight vector v_L at each layer
+2. Compute the full 5×5 cosine similarity matrix (or its L+4 variant including all layer-wise probe vectors)
+3. Check: (a) Are Kobayashi/Puccetti/Macocco/Stolfo all ~colinear? (b) Does our residual direction align with them, and at which layer? (c) Do they rotate through training (Pythia checkpoints)?
 
-### 6.4 Writer localization via per-layer single-ablation
-Extend subspace ablation: ablate at every single layer L individually (not just the few we tested), measure final-layer probe AUROC for each. Layers whose individual ablation causes the biggest final-layer drop are critical "maintenance writers". Generates a full "writer importance" profile.
+**Predicted outcomes and interpretations**:
+- If all align → we have unified the frequency literature; the paper contribution is now "there is ONE frequency direction in transformers that manifests five different ways depending on where you look."
+- If our residual direction is orthogonal to b_LN → we have confirmed TWO pathways (residual stream and head bias) that independently encode frequency. This also explains the decoupling (low output KL under residual ablation).
+- If they mostly align but one is off → the outlier is the interesting finding.
 
-### 6.5 Residual-direction vs b_LN alignment
-For each model where we have b_LN extraction:
-- Compute un-embedded residual freq direction: W_U^T @ v_L (for each layer L).
-- Compute cosine with b_LN direction (for models that have it) or with unigram-log-probability direction (for all models).
-- Shows whether the two "frequency pathways" (residual stream direction vs prediction-head bias) encode the same or different output-space directions.
+**Feasibility**: Extremely high. This is cosine similarities between known vectors. Could be done in 1-2 days of compute + analysis.
 
-### 6.6 Training-dynamics of the direction
-For Pythia-70M checkpoints:
-- Compute freq direction at each checkpoint × each layer.
-- Measure cos between checkpoint-t direction and checkpoint-T direction (does the direction stabilize early?).
-- Measure when the "active erasure" in late layers emerges during training.
+**Paper value**: Very high. Turns a potentially-tautological finding into a unifying story across literature.
+
+### Direction 2 — **Per-component circuit decomposition + recovery attribution** (HIGH NOVELTY, HIGH FEASIBILITY)
+
+**Question**: Which attention heads and MLP sublayers write the frequency direction, and which components drive the post-ablation recovery?
+
+**Why novel**: Agent A and Agent B both flag this as the clearest literature gap. No paper has decomposed a probe-identified residual-stream direction into per-head + per-MLP contributions with signed differentials.
+
+**Method**:
+1. **Direct Logit Attribution (DLA) for the frequency direction** (Elhage's mathematical framework applied to a non-logit target):
+   - For each (model, layer, component), compute the signed projection of that component's output onto the frequency direction at layer L.
+   - Separate per-head and per-MLP decomposition; separate high-freq vs low-freq inputs.
+   - Signed differential (high-low) × cosine with the direction = "frequency DLA score".
+2. **Identify head types** analogously to IOI:
+   - Early-layer heads that attend to the target token position = "frequency detector heads"
+   - Mid-layer MLPs that broadly add = "frequency accumulator MLPs"
+   - Late-layer MLPs that subtract = "frequency eraser MLPs" (predicted to exist based on the suppression we see)
+   - Any late-layer heads that attend back to the accumulated signal = "frequency mover heads"
+3. **Recovery attribution**: Ablate at L15 (single-layer, probe direction). Measure the per-layer contribution to recovery: for each downstream layer L', compute (projected_onto_freq(component_output) under ablation) - (same under clean). Layers where this delta is positive are "recovery writers".
+4. **Hydra effect test**: Ablate the primary recovery writers identified in step 3. Do backup heads/MLPs activate? (McGrath et al. 2023.)
+
+**Feasibility**: Medium. Needs TransformerLens + careful bookkeeping. Estimated 2-3 weeks on cluster + analysis. Pythia-6.9B is the primary target; extend to OLMo-1B and Llama-3.1-8B for cross-model universality.
+
+**Paper value**: Very high. Turns the "representation" paper into a proper "circuit" paper, making it competitive with Wang et al. IOI in scope.
+
+### Direction 3 — **Frequency-semantics geometric relationship** (MEDIUM-HIGH NOVELTY)
+
+**Question**: Are the frequency direction and semantic (domain) directions orthogonal? Does ablating one affect the other's decodability?
+
+**Why novel**: Agent D proposes this grounded in Park et al.'s causal orthogonality theorem. Park predicts causally separable concepts should be orthogonal under the causal inner product. Frequency and semantic domain ARE causally separable (each domain has its own Zipfian distribution), so the prediction is orthogonality — but only one prior paper (Marks & Tegmark on truth) has systematically tested such predictions for a specific concept.
+
+**Method**:
+1. Train one-vs-rest semantic probes per layer per domain (5 domains) on ScaleJSD: get 5 semantic direction vectors per layer.
+2. Compute the Gram matrix (6 × 6 per layer, using freq direction + 5 semantic directions). Both under Euclidean inner product AND Park et al.'s causal inner product.
+3. Layer-wise orthogonality trajectory: does cos(freq_dir, semantic_dir_i) decrease from early to late layers? (predicted by Voita 2019 surface-to-semantic progression)
+4. Bidirectional ablation:
+   - Rank-1 ablate freq direction → measure semantic probe AUROC → predict: unchanged if orthogonal
+   - Rank-1 ablate each semantic direction → measure freq probe AUROC → same prediction
+5. Per-neuron co-alignment: for each MLP neuron output weight w_out, compute cos(w_out, freq_dir) vs cos(w_out, max semantic_dir_i). Scatter plot separates disjoint writers from shared writers.
+
+**Feasibility**: Medium. Probes need to be trained cleanly (fix the semantic probe bug in probe_under_ablation.py first). Estimated 1-2 weeks.
+
+**Paper value**: Medium-high. If orthogonal → confirms Park et al. prediction for a new concept + shows natural disentanglement. If entangled → reveals model has a non-trivial causal model of language (freq and semantics ARE coupled for some domains).
+
+### Direction 4 — **Residual-stream vs head-bias pathway test** (MEDIUM NOVELTY)
+
+**Question**: Are the two frequency pathways (residual stream direction + b_LN) independent, or are they the same direction accessed at different points in computation?
+
+**Why novel**: Directly tests our "decoupling" hypothesis from the cumulative-ablation-with-low-output-KL observation. No paper has connected residual-stream and head-bias frequency representations.
+
+**Method**:
+1. Un-embed the residual-stream frequency direction: `W_U @ v_L` for each layer L (result is in vocabulary space).
+2. Compute cosine with b_LN direction (for models that have it) or with the unigram-log-probability direction (for all models).
+3. Co-ablation test: perform rank-1 ablation of v_L AND zero out b_LN. Measure output KL and prediction behavior. If both pathways contribute to output frequency, co-ablation should produce much larger KL than either alone.
+4. Check this for each layer L: does the un-embedded residual direction align with b_LN at any layer? At some layer boundary does it flip?
+
+**Feasibility**: High. This is mostly linear algebra on existing matrices + a few forward passes with different ablations. Estimated <1 week.
+
+**Paper value**: Medium. Supports the decoupling story. Mostly a confirmation/extension of existing findings.
+
+### Direction 5 — **Training dynamics of the frequency direction** (MEDIUM NOVELTY, HIGH COMPUTE COST)
+
+**Question**: When does the 1D frequency direction emerge during training? Does it consolidate from higher-dim to 1D over time? When does active erasure in late layers emerge?
+
+**Why novel**: Zhang et al. 2025 predicts saddle-to-saddle dynamics should show frequency emerging first. Puccetti 2022 observed outlier dimensions emerge at ~80K training steps. But nobody has tracked the 1D residual-stream frequency direction across checkpoints.
+
+**Method**:
+1. For Pythia-70M (15 checkpoints), compute freq probe direction at each (checkpoint, layer).
+2. Measure cos(direction at step t, direction at final step) to see stabilization.
+3. Measure rank(cov of residuals that decode high-freq) — does it collapse from d_model to ~1 over training?
+4. Measure when final-layer AUROC decay starts (active erasure emerges).
+
+**Feasibility**: Medium. The compute is modest but the analysis is multi-dimensional. Estimated 2-3 weeks.
+
+**Paper value**: Medium. More of a supporting experiment than a lead contribution. Useful as a section in a larger paper.
+
+---
+
+## 7. Revised Paper Strategy
+
+### 7.1 Narrative arc (proposed)
+
+The paper should be structured around a single unifying question: **"How does token frequency flow through a transformer language model?"**
+
+**Act 1: The representation.** Token frequency is encoded in a 1D direction of the residual stream at every layer. Linear probes find it; rank-1 projection destroys it downstream; random projection is null. This is true across 5 models and 3 architectures. (Expected from LEACE theory but empirically grounded.)
+
+**Act 2: The negative result.** The 1D direction is NOT carried by any identifiable set of specialist neurons. Distributed writing across many MLP neurons; no dataset-consistent writer population. This is the clean neuron-vs-direction contrast (novel).
+
+**Act 3: The unification** (Direction 1 above). Show that our residual-stream 1D direction connects to (or doesn't connect to) Kobayashi's b_LN, Puccetti's outlier dimensions, Macocco's last-layer heuristic, and Stolfo's token-frequency neurons. Either outcome is publishable.
+
+**Act 4: The circuit** (Direction 2 above). Per-head + per-MLP decomposition of the frequency direction. Identify the writers, the maintainers, and the erasers. Recovery dynamics after single-layer ablation reveal the maintenance circuit.
+
+**Act 5: The geometry** (Direction 3 above). Frequency vs semantic direction orthogonality. Test Park et al.'s causal orthogonality prediction for a new concept.
+
+Acts 1-2 use our existing data. Acts 3-4-5 require new experiments.
+
+### 7.2 Venue calibration
+
+Post-literature-review, the best venue options:
+
+- **NeurIPS 2026 main track**: Possible if we land Direction 1 (unification) + Direction 2 (per-component circuit) cleanly. Acts 1-4 constitute a full paper with clear novelty despite LEACE/INLP dependence.
+- **NeurIPS 2026 MI Workshop**: Very likely; this is the natural venue for the workshop-paper lineage anyway.
+- **ICLR 2027**: If we also land Direction 3 (entanglement) to round out the story.
+- **COLM 2025/2026**: Strong fit given LM focus.
+- **ACL Main or Findings**: If we frame around the linguistic implications (frequency-sensitive generation, rare-token handling).
+
+### 7.3 Two-sentence pitch (v2)
+
+> "Token frequency in transformer language models is encoded as a single 1D direction in the residual stream, written into additively by many MLP neurons with no specialists — a clean empirical case where the same concept is localizable at the direction level but distributed at the neuron level. We trace this frequency circuit end-to-end (embedding → per-head attention → MLP writers/erasers → prediction-head bias), unify five separately-documented frequency-encoding phenomena (Kobayashi's b_LN, Puccetti's outlier dimensions, Macocco's last-layer heuristic, Stolfo's token-frequency neurons, and our direction) into a single framework, and show how the model actively maintains this direction against single-layer erasure while remaining functionally decoupled from the head-bias pathway."
+
+---
+
+## 8. Critical Bugs to Fix Before Direction 2 Runs
+
+Logged here so they don't get lost:
+
+1. **Hook ordering in `subspace_ablation.py`** — ablator must run before capture at the ablated layer. Current code swaps this, so L15-itself AUROC shows 0.97 instead of 0.5 (tautologically). Fix: in `ablated_forward()`, register ablator hooks first, then capture hooks.
+
+2. **Semantic probe breakage in `probe_under_ablation.py`** — in per-dataset mode, `category_labels` is constant → NaN. Fix: pool datasets before training semantic probes.
+
+3. **`circuit_ablation.py` averages |diff_proj| across datasets before selection** — given Jaccard ~0.06 cross-dataset overlap, this averages to nonsense. Fix: per-dataset selection, then union.
+
+4. **`compute_component_freq_flow` uses absolute values for MLP/attn fraction** — claims should be "MLP dominates the ABSOLUTE projection onto the frequency direction", not "MLP writes more than attention". Fix: report signed and abs versions separately.
+
+5. **Per-neuron freq_projections for 1B+ models are only on cluster** — ~1.4GB, not in repo. Need to either commit a sampled/sparsified version or an aggregate-by-layer version for reproducibility.
+
+These should be fixed before the Direction 2 experiments so the data we collect is clean.
 
 ---
 
