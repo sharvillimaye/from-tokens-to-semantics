@@ -8,34 +8,6 @@
 **Data**: ScaleJSD — 291 synonym pairs across 5 domains (emotion, medical, legal, scientific, verb), each pair a high/low-frequency token with identical meaning (e.g. "happy"/"elated"). Shared sentence templates isolate frequency from semantic content.
 
 ---
-
-## 1. Abandoned Framings
-
-Two previous framings are now **officially dropped**. Documenting them here so we don't accidentally resurrect them.
-
-### 1.1 Dropped: Three-axis neuron decomposition (coverage / mass / affinity)
-
-Prior versions of this document proposed decomposing MLP neurons along three "axes" — binary coverage (firing breadth), raw mass (activation intensity), frequency affinity (preference for high vs low freq) — and argued these axes identify neuron populations with distinct causal roles.
-
-**Why we dropped it**:
-- The original JSD-based "causal dissociation" between these populations was largely an L1 normalization artifact. With a normalization-free linear probe, ablating 5-10% of neurons selected by any axis produces essentially zero change in frequency decodability (see §3.3).
-- Cross-dataset Jaccard overlap of top-5% "frequency writers" (by |diff_proj|) is ~0.06, near chance. There is no consistent population of "frequency neurons" across text domains.
-- Top 1% of neurons accounts for only ~9% of |diff_proj|; frequency writing is distributed, not concentrated.
-- The axes were descriptive (what neurons do) not functional (what role they play in a circuit). None of them map cleanly to established neuron types in the literature (Stolfo's token-frequency neurons, Gurnee's universal neurons, etc.).
-
-**What remains**: The coverage-affinity experiment code (`coverage_affinity_experiment.py`) is still useful for the per-neuron statistics it computes, but we no longer interpret these as identifying distinct causal populations.
-
-### 1.2 Dropped: Discrete-specialist "frequency circuit"
-
-We initially expected that ablating carefully-selected neurons (by affinity, coverage, mass, or circuit-level |diff_proj|) would surgically disable the frequency circuit. This hypothesis is **falsified** by our experiments:
-
-- Probe-under-ablation on Pythia-70M / Pythia-6.9B / OLMo-1B: affinity ablation produces AUROC drops of 0.000–0.007 (noise-level).
-- Circuit-based ablation (selecting by |diff_proj| averaged across datasets, up to 50%): still no meaningful probe AUROC drop.
-
-**Interpretation**: Frequency is not stored in a small set of specialist neurons. Many neurons write into the frequency channel additively and redundantly — we cannot kill the signal by removing any manageable fraction of them.
-
----
-
 ## 2. The Current Finding: Frequency Lives in a 1D Direction
 
 ### 2.1 Core claim
@@ -385,12 +357,29 @@ These should be fixed before the Direction 2 experiments so the data we collect 
 
 ## 7. Paper Positioning (Current Understanding)
 
-### 7.1 Likely venue
-Workshop / Findings-level paper. Specifically:
-- NeurIPS 2026 MI Workshop (natural successor to the NeurIPS 2025 workshop paper)
-- ICML 2026 MI workshop
-- COLM 2025 (LM-focused)
-- ACL Findings (if framed linguistically)
+### 7.0 Applied paper direction (recommended pivot, 2026-04-15)
+
+A sanity check review surfaced a critical tension: our cumulative ablation produces tiny output KL (0.001-0.025), meaning the residual-stream frequency direction may be **epiphenomenal** — the model doesn't need it for output. This undercuts both the mechanistic story and any steering claim.
+
+**De-risking experiment E0.1 (MAKE OR BREAK)**: Test whether **adding** along the direction moves outputs even though **projecting it out** doesn't. If additive steering shifts generated token log-frequency monotonically with α (effect ≥ 0.5 stdev) while perplexity stays within 2× baseline, the applied paper is alive.
+
+If E0.1 passes, the recommended pivot is an **applied steering paper**:
+
+> "One vector, three knobs: a probe-derived frequency direction controls lexical sophistication, register, and rare-token generation across 5 models without fine-tuning."
+
+Three benchmarks: B1 (rare-token gen: BC5CDR/SciERC), B2 (register: GYAFC formal↔informal), B3 (simplification: Newsela/ASSET). Baselines: frequency penalty, CAA, ReFT, DExperts.
+
+Target venue: **EMNLP 2026 main** (May deadline).
+
+If E0.1 fails: pivot to Backup B — "probes detect representations that the model doesn't use; a cautionary tale for representation engineering." Still publishable at MI workshop.
+
+**Script for E0.1 + E0.2**: `scripts/interventions/frequency_steering.py`
+
+### 7.1 Likely venue (updated)
+- EMNLP 2026 main (applied paper, if E0.1 passes)
+- ACL 2027 (if EMNLP misses)
+- NeurIPS 2026 MI Workshop (companion mechanistic paper with D2+D5)
+- COLM 2025/2026 (LM-focused)
 
 ### 7.2 Narrative spine
 "Token frequency provides a clean test case for studying how features are routed through transformer residual streams. We show: (1) frequency is encoded as a 1D direction; (2) neuron-level interventions completely fail to localize this signal while rank-1 direction interventions are devastating — the first clean demonstration of the theoretically-predicted neuron-vs-direction dissociation for a specific feature; (3) after single-layer ablation, downstream layers partially reconstruct the frequency direction, revealing active maintenance circuitry; (4) cumulative ablation decouples residual-stream frequency from model output behavior, consistent with a separate head-bias pathway (Kobayashi et al. 2023). We then perform [to be filled in by experiments §6.1–6.5]."
