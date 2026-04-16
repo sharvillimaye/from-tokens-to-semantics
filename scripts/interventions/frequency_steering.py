@@ -130,8 +130,9 @@ class SteeringHook:
                     else:
                         x = out
                         rest = None
-                    # Add steering: x ← x + α·v
-                    x_steered = x + self.alpha * self.direction.to(x.device)
+                    # Add steering: x ← x + α·v (cast direction to residual dtype/device)
+                    v = self.direction.to(device=x.device, dtype=x.dtype)
+                    x_steered = x + self.alpha * v
                     if rest is None:
                         return x_steered
                     return (x_steered, *rest)
