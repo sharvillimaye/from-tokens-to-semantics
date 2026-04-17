@@ -626,21 +626,40 @@ def _run_steering_test_supports_deterministic() -> bool:
 # We override at runtime via a torch.Tensor.generate wrapper when --deterministic
 # is passed.  This keeps the script portable and reuses the helper unchanged.
 
+def _install_deterministic_shim() -> None:
+    """Monkey-patch HF generate() to force greedy decoding.  Used when the
+    imported run_steering_test doesn't natively support a deterministic kwarg.
+
+    In current transformers, `generate` lives on GenerationMixin; fall back to
+    PreTrainedModel if the mixin isn't present."""
+    import transformers
+
+    target = None
+    for attr_name in ("GenerationMixin", "PreTrainedModel"):
+        cls = getattr(transformers, attr_name, None)
+        if cls is not None and hasattr(cls, "generate"):
+            target = cls
+            break
+    if target is None:
+        print("[deterministic mode] WARNING: could not find generate() to patch")
+        return
+
+    _orig_generate = target.generate
+
+    def _greedy_generate(self, *g_args, **g_kwargs):
+        g_kwargs["do_sample"] = False
+        g_kwargs.pop("temperature", None)
+        g_kwargs.pop("top_p", None)
+        g_kwargs.pop("top_k", None)
+        return _orig_generate(self, *g_args, **g_kwargs)
+
+    target.generate = _greedy_generate  # type: ignore[assignment]
+    print(f"[deterministic mode] patched {target.__name__}.generate → greedy")
+
+
 if __name__ == "__main__":
-    # If --deterministic is passed and run_steering_test doesn't natively
-    # support it, wrap AutoModelForCausalLM.generate to force greedy.
-    _saw_det = any(a == "--deterministic" for a in os.sys.argv)
-    if _saw_det and not _run_steering_test_supports_deterministic():
-        import transformers
-        _orig_generate = transformers.PreTrainedModel.generate
-
-        def _greedy_generate(self, *g_args, **g_kwargs):
-            g_kwargs["do_sample"] = False
-            g_kwargs.pop("temperature", None)
-            g_kwargs.pop("top_p", None)
-            return _orig_generate(self, *g_args, **g_kwargs)
-
-        transformers.PreTrainedModel.generate = _greedy_generate  # type: ignore[assignment]
-        print("[deterministic mode] patched model.generate → greedy")
-
+    import sys as _sys
+    if any(a == "--deterministic" for a in _sys.argv) and \
+            not _run_steering_test_supports_deterministic():
+        _install_deterministic_shim()
     main()
