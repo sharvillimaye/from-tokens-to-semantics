@@ -85,6 +85,98 @@ Based on literature review (60+ papers across 6 areas):
 
 None of these are main-track NeurIPS material on their own. Positioned for MI workshop, COLM, or ACL Findings.
 
+### 2.5 Post-Apr-15 Track Results (2026-04-17/18)
+
+Four parallel experimental tracks + two local analyses have updated the picture since §2.4 was written. **Summary: the paper thesis shifts from "causal-weak shadow feature" to "probe decodability does not predict steering responsiveness, with a universal concept-dependent write-site pattern."** Scoop check against Braun et al. 2026 (EACL Findings) is critical — see §5.4.
+
+#### Track 4 — Steering metrics with proper behavioral metrics
+
+11-α greedy sweep (α ∈ {-2, -1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1, 2}), 200 prompts per model, on three models. Metrics: Flesch-Kincaid grade, mean word length, type-token ratio, mean Zipf (wordfreq library), first-sentence length, first-token high/low freq mass, median perplexity.
+
+| Model | Steer L | ΔFK (α=-2 → +2) | Zipf Δ | First-sent Δ | Perplexity stable |
+| --- | --- | --- | --- | --- | --- |
+| **OLMo-7B** | L16 | **7.83 → 5.38 (-2.45)** | 6.08 → 6.14 | 79 → 52 chars | ✓ (2.7-2.9) |
+| **Llama-3.1-8B** | L7 | **8.45 → 5.19 (-3.26)** | 5.96 → 6.12 | 84 → 58 chars | ✓ (2.4-2.8) |
+| Pythia-6.9B | L10 | 5.78 → 5.48 (-0.30) | flat | flat | ✓ |
+
+Clean monotonic FK-grade control on OLMo and Llama. Pythia-6.9B step143000 is near-dead despite identical probe AUROC (0.975) — a direct dissociation of decodability from steering responsiveness (Pythia-dead gets a short mention per §9; not a central claim).
+
+#### Track Circuits — Signed per-component attribution patching
+
+Gradient × class-differential attribution on metric `M(x) = <resid[L*], v>` for every attention head and every MLP.
+
+| Model | Peak L | AUROC | Top-10 writers | Top eraser (attn) |
+| --- | --- | --- | --- | --- |
+| OLMo-7B | L19 | 0.967 | 100% MLPs (L16-19, L0-2) | L19:30 (-0.009) |
+| Llama-3.1-8B | L7 | 0.970 | 100% MLPs (L0-7, concentrated early) | L7:0 (-0.008) |
+| Pythia-6.9B | L12 | 0.953 | 100% MLPs (L0=1.29, L2-12 spread) | L8:7 (-0.068) |
+
+**Universal raw-magnitude pattern**: top-10 writers are 100% MLPs in all 3 architectures; attention heads contribute only as small erasers.
+
+#### MLP-vs-attention per-capacity normalization (local, Apr 18) — caveat to "MLP-exclusive"
+
+Raw magnitudes: MLP dominates by 3.9× (OLMo), 21.4× (Llama), 6.8× (Pythia). But attention heads have d_head = 128 output channels each, versus MLP's d_model = 4096. Normalizing:
+
+| Model | Raw ratio | **Per-output-dim ratio** | Per-parameter ratio |
+| --- | --- | --- | --- |
+| OLMo-7B | 3.9× | **0.12×** (attn stronger per-dim) | 0.06× (attn stronger per-param) |
+| Llama-3.1-8B | 21.4× | 0.67× | 0.34× |
+| Pythia-6.9B | 6.8× | 0.21× | 0.11× |
+
+Revised claim: the correct framing is *"MLP raw dominance is partly an output-channel-capacity effect; the frequency direction is broadly distributed across both component types, with MLPs aggregating more because they have 32× more output channels than a single head."* Per-channel, attention heads are comparable or stronger.
+
+#### Idea E — Active eraser vs. passive dilution (local analysis, Apr 18)
+
+Re-analysis of `recovery_attribution.csv`. Tracks `clean_M_diff_hi_lo` = signed projection of class-mean difference onto v per layer.
+
+| Model | Peak L | M_diff at peak | M_diff after peak | Interpretation |
+| --- | --- | --- | --- | --- |
+| OLMo-7B | L19 | 0.657 | Grows to L28 (0.715), crashes L31 (0.390) | Hybrid: grows then suddenly erased at final layer |
+| **Llama-3.1-8B** | L7 | 1.04 | **Keeps growing monotonically to L30 (2.12)**, crashes L31 (1.15) | **Passive dilution** — magnitude never stops; AUROC decline is relative norm effect |
+| Pythia-6.9B | L12 | 11.3 | Gradual decline to L31 (9.5) | Gradual active erasure |
+
+**Key finding**: In Llama-3.1-8B, frequency signal MAGNITUDE grows across every layer. The probe-AUROC decline is NOT destruction — it's competing features growing faster (relative dilution, not active erasure). In all 3 models, L31 shows a sudden crash — consistent with prediction-head/b_LN pathway acting at the final layer.
+
+#### Track A — Truth-direction comparison (methodology-limited)
+
+Marks & Tegmark 2023 truth direction extracted from geometry-of-truth TrueFalse set (1000 balanced statements from 8 merged CSVs at `saprmarks/geometry-of-truth`). Same α grid on same ScaleJSD continuation prompts.
+
+| Model | Truth probe AUROC | Truth best L | Truth KL @α=1 | Freq KL @α=1 | Ratio truth/freq |
+| --- | --- | --- | --- | --- | --- |
+| OLMo-7B | 0.860 | L21 | 0.0130 | 0.0255 | 0.51 |
+| Llama-3.1-8B | 0.957 | L12 | 0.0037 | — | — |
+| Pythia-6.9B | 0.849 | L15 | 0.0059 | — | — |
+
+Surprise — truth KL < freq KL. Methodology artifact: both tests used ScaleJSD synonym-pair prompts (right for frequency, wrong for truth). Parked — re-run with factual-question prompts before claiming.
+
+#### Track C — Hallucination predictor (weak but real)
+
+PopQA 2000 questions per model, greedy-decoded correctness.
+
+| Model | Probe ρ (overall) | ρ on Q3 (mid-rare) | Probe AUC | Logprob baseline AUC |
+| --- | --- | --- | --- | --- |
+| OLMo-7B | -0.076 (p=7e-4) | -0.211 | 0.45 | 0.69 |
+| Llama-3.1-8B | -0.165 (p=1e-13) | -0.326 | 0.39 | 0.79 |
+| Pythia-6.9B | -0.053 (p=0.02) | -0.160 | 0.46 | 0.82 |
+
+Consistent negative correlation: high freq-direction activation → more likely to hallucinate. Statistically real in all 3 models; strongest on mid-rarity Q3 slice. AUC below answer-logprob baseline → usable as auxiliary feature, not standalone detector.
+
+#### Track QKV reader — pod running (dispatched Apr 17)
+
+CPU-only job `ani-qkv-reader-3m-sjwdx`. Computes `|v · W_{Q,K,V}^h_row|` for every head at every layer L > L*, compared to random-direction null. Detects whether any attention head READS v via its Q/K/V projections (attribution patching only detects writers).
+
+#### Idea C (b_LN alignment) — ✅ COMPLETE (Apr 18, pod `ani-bln-alignment-3m-wh9bb`)
+
+| Model | `cos(u, log P_model)` | Spearman ρ | `b_LN` available? |
+| --- | --- | --- | --- |
+| OLMo-7B | **-0.003** | -0.002 | No (RMSNorm) |
+| Llama-3.1-8B | **-0.150** | +0.025 | No (RMSNorm) |
+| Pythia-6.9B | -0.124 | -0.017 | Yes; `cos(v, b_LN) = +0.003` |
+
+**Pythia sanity check**: `cos(log P_model, W_U · b_LN) = 0.916` → model-derived neutral-context unigram IS the b_LN projection, validating our approach for RMSNorm models.
+
+**Result: ORTHOGONAL pathways.** |cos| ≤ 0.15 in all three models. The residual-stream frequency direction and the prediction-head b_LN pathway are **essentially independent** — two separate frequency-encoding mechanisms. Mechanistically explains the cumulative-ablation low-KL observation (§2.2): ablating the residual pathway leaves the b_LN pathway intact, so output frequency statistics barely change. See §4.5 for full interpretation.
+
 ---
 
 ## 3. Experimental Record
@@ -125,31 +217,58 @@ None of these are main-track NeurIPS material on their own. Positioned for MI wo
 
 ## 4. The Open Question: Mechanism
 
-We have characterized the **representation** (1D direction, distributed writers, decoupled from output). We have not traced the **mechanism**. Open questions:
+We have characterized the **representation** (1D direction, distributed writers, decoupled from output). We have partly traced the **mechanism** (Track Circuits + Idea E — see §2.5). Open questions with current status:
 
-### 4.1 Who writes?
-- Which specific attention heads at which layers project into the frequency direction? (Analogous to "name mover heads" in IOI.)
-- Are there early-layer heads that attend to the target token position and move token-identity (which carries frequency via the embedding) into the residual stream for downstream MLPs to amplify?
-- Which MLP layers are the signed "frequency writers" (positive differential projection for high-freq vs low-freq) vs "erasers" (negative)? Our current circuit tracing uses absolute values.
+### 4.1 Who writes? ✅ PARTIALLY ANSWERED (Track Circuits)
+**Finding (see §2.5)**: MLPs dominate raw attribution in all 3 models; top-10 writers are 100% MLPs in OLMo/Llama/Pythia. Writers are distributed across early layers (L0-L2) and the peak-layer band.
 
-### 4.2 Who maintains?
-- After single-layer ablation at L15 of Pythia-6.9B, probe AUROC recovers from 0.46 → 0.75 over layers 16-31. Which layers contribute most to this recovery? (Ablation at each single intermediate layer would localize the "maintenance writers".)
-- Is recovery driven by MLP alone, attention alone, or both? Does it depend on scale (70M shows no recovery; 6.9B recovers most)?
+**Caveat (MLP per-capacity analysis)**: Per-output-channel, attention heads are comparable or stronger. Raw dominance is partly a capacity effect (MLP has 32× more output dims than single head).
 
-### 4.3 Who erases?
-- Late-layer probe AUROC declines even without intervention. Is this active erasure (specific components writing *against* the frequency direction) or passive dilution (other features growing, pushing the frequency-direction projection down relatively)?
+**Still open**: Whether attention heads READ from the direction (Q/K/V reader test in flight — `ani-qkv-reader-3m-sjwdx`).
 
-### 4.4 What's the relationship with semantics?
-- Are the frequency direction and the semantic (domain) directions orthogonal? If so, what allows them to be independent in the residual stream geometry?
-- Does ablating the frequency direction affect semantic probe AUROC? If yes, frequency and semantics are entangled.
-- Do any MLP neurons write to BOTH frequency AND semantic directions, or are the writers disjoint?
-- Is the "frequency to semantics transition" actually "growth of semantic subspaces while frequency subspace shrinks" — i.e., a relative-norm phenomenon?
+### 4.2 Who maintains? ✅ PARTIALLY ANSWERED (Track Circuits recovery)
+**Finding**: No active maintenance. Single-layer ablation produces **Δ ≈ -0.5 to -1.0** in downstream M_diff and the signal does not recover across 10+ downstream layers. This differs from the workshop-paper observation on Pythia-6.9B (0.46 → 0.75 recovery) — likely because that measurement was probe-AUROC-based and confounded by dilution, not magnitude-based.
 
-### 4.5 Does the residual-stream frequency direction align with the prediction-head b_LN direction?
-- Kobayashi showed b_LN in the output embedding space correlates with frequency (cos ≈ 0.78 with log-freq on GPT-2).
-- Our residual direction is in d_model space before unembedding.
-- If we un-embed our direction (W_U @ v_L), does it align with b_LN?
-- This would tell us whether the residual pathway and the head-bias pathway converge on the same output-space frequency axis or are genuinely independent pathways (the "decoupling" implied by low output KL).
+### 4.3 Who erases? ✅ PARTIALLY ANSWERED (Idea E, Apr 18)
+**Finding**: Model-dependent.
+- **Llama-3.1-8B**: PASSIVE DILUTION. M_diff magnitude grows monotonically through all layers. AUROC decline is a relative-norm phenomenon — competing features grow faster than the frequency signal.
+- **OLMo-7B**: HYBRID. M_diff grows to L28 then crashes at L31 (final layer).
+- **Pythia-6.9B**: GRADUAL ACTIVE EROSION. M_diff declines slowly from L12 to L30 then sharply at L31.
+- **All 3 models share an L31 (final-layer) sharp drop** — consistent with prediction-head / b_LN erasure mechanism.
+
+### 4.4 What's the relationship with semantics? 🟡 PARTIALLY ANSWERED; key tests queued
+**Partial**: Track 4 / E0.2 showed mean |cos(freq, semantic)| ≈ 0.014 across 5 ScaleJSD domains in OLMo-7B → approximately orthogonal. Cross-model version not yet run.
+
+**Queued (Idea A, B, F — see §6.3)**:
+- Semantic-direction rank-1 ablation: mirror the frequency ablation protocol for each of 5 domains
+- Semantic-direction steering: does domain steering shift generation toward that domain?
+- Interference test: joint steering along (α_freq · v_freq + α_sem · v_sem)
+- Idea G: reorganization probes — what grows as frequency AUROC "declines"?
+
+### 4.5 Does the residual-stream frequency direction align with the prediction-head b_LN direction? ✅ ANSWERED (Idea C, Apr 18) — **ORTHOGONAL**
+
+**Finding**: The residual-stream frequency direction `v` is essentially **orthogonal** to the prediction-head unigram / b_LN pathway across all 3 models.
+
+| Model | `cos(u, log P_model)` | Spearman ρ | `cos(v_resid, b_LN)` |
+| --- | --- | --- | --- |
+| OLMo-7B (RMSNorm, no b_LN) | **-0.003** | -0.002 | N/A |
+| Llama-3.1-8B (RMSNorm, no b_LN) | **-0.150** | +0.025 | N/A |
+| Pythia-6.9B (has b_LN) | **-0.124** | -0.017 | **+0.003** |
+
+**Sanity check (Pythia)**: `cos(log P_model, W_U · b_LN) = 0.916` — confirms that model-derived neutral-context unigram IS the b_LN projection for Pythia. This validates the `log P_model` substitute we used for RMSNorm models.
+
+**Interpretation**: **Two independent frequency pathways.**
+1. **Residual-stream pathway**: our probe direction `v`, lives in internal representation space
+2. **Prediction-head pathway**: b_LN (or its RMSNorm analog, the unigram bias acquired during training), lives in the output bias
+
+They are essentially orthogonal (|cos| < 0.15 in all models). When we ablate `v` in the residual stream (§2 cumulative-ablation), the b_LN pathway is untouched and continues to inject frequency information into logits. That's **mechanistically why output KL stays small** despite frequency probe AUROC crashing — the output frequency behavior is handled by the independent b_LN pathway.
+
+This is a **clean mechanistic finding that unifies**: (a) our cumulative-ablation low-KL observation (§2.2), (b) Kobayashi 2023's b_LN = frequency direction result, and (c) our Track 4 steering result (steering `v` produces register / FK shifts = internal-representation behavior, separate from b_LN-driven output frequency statistics). **Cite: Kobayashi et al. 2023 (arXiv:2305.18294) as establishing the prediction-head pathway; we establish the orthogonal residual-stream pathway.**
+
+### 4.6 Do attention heads read v? 🟡 DISPATCHED (QKV reader)
+**Status**: CPU-only job `ani-qkv-reader-3m-sjwdx` running. Direct weight-space test of reader heads via `|v · W_{Q,K,V}^h_row|` compared to random-direction null.
+
+**Motivation**: Attribution patching (Track Circuits) measures output differential — does the component WRITE in v's direction. Heads could still READ from v through Q/K/V projections without their output projecting onto v. This is the explicit reader test.
 
 ---
 
@@ -198,9 +317,85 @@ No existing paper does this decomposition for a probe-identified direction. Doin
 
 ---
 
-## 6. Prioritized Research Directions
+## 6. Prioritized Research Directions — Triaged Roadmap (updated Apr 18, 2026)
 
-Based on the literature synthesis, five directions ranked by novelty × feasibility:
+This section was rewritten after Track 1–4 completed and the literature scoop check (Braun 2026) landed. Previous Directions 1–5 (below) are retained for reference but are superseded by the triage here.
+
+### 6.0 Triage summary
+
+Ideas are now bucketed by **expected paper impact × feasibility × post-scoop novelty**:
+
+| Tier | Idea | Status | Est. effort | Why |
+| --- | --- | --- | --- | --- |
+| **P0 — running now** | Idea C — b_LN alignment test | Dispatched Apr 18 (cluster CPU) | hours | Unifies our direction with Kobayashi 2023; single matmul + one forward pass per model |
+| **P0 — running now** | Track QKV reader | Dispatched Apr 17 (cluster CPU) | hours | Completes the circuit story: writing ≠ reading |
+| **P0 — done** | Idea E — active eraser re-analysis | Completed Apr 18 (local) | 10 min | Reveals Llama late-layer signal growth is passive dilution, not active erasure; L31 crash universal |
+| **P1 — high impact** | Idea 2 — Frequency-sensitive task KL | Queued; needs GPU | 1-2 days | Converts "small KL" from liability to feature-specificity proof; runs on freq-sensitive prompt distributions (BC5CDR rare-medical, WikiLarge simplification, GYAFC register, Zipf-tail completions) |
+| **P1 — high impact** | Idea 3 — Frequency direction as code-length | Queued; CPU only | 1 day | Direct information-theoretic prediction: `<residual[L*], v>` correlates with log P(token) from external unigram. If r > 0.8: paper reframes around "learned arithmetic-code axis" |
+| **P1 — high impact** | Idea 8 — Dependency graph / path patching for v | Queued; needs GPU | 3-5 days | Direct causal reader test (complement to QKV weight projection). Gold-standard test from Goldowsky-Dill 2023 |
+| **P1 — high impact** | Idea 6 — Universal-feature taxonomy | Needs additional concept-direction experiments | 2 weeks | Synthesis position paper: plot Arditi refusal / Marks truth / Tigges sentiment / our frequency on a 3D axis (probe AUROC universality × write-site pattern × causal-effect ratio). Finding: **write-site is concept-dependent, not architecture-dependent**. |
+| **P1 — high impact** | Idea G — Reorganization probes (what GROWS as freq "erases") | Queued; needs GPU | 2-3 days | Train probes at every layer for: frequency, domain, sentiment, syntactic role, formality, truth. Shows whether AUROC decline is zero-sum rotation (semantic gain = freq loss) or more complex reorganization |
+| **P2 — completion** | Idea A — Semantic-direction ablation (symmetric) | Queued; needs GPU | 2 days | Ablate each ScaleJSD domain direction, measure probe AUROC crash + output KL. Mirror of frequency ablation; expected reviewer ask |
+| **P2 — completion** | Idea B — Semantic-direction steering | Queued; needs GPU | 1-2 days | Does steering along a domain direction shift generation toward that domain? Analog of frequency→FK for domain→topic |
+| **P2 — completion** | Idea 1 — Translator neurons (reframed in 1D-subspace language) | Queued | 1 week | Identify neurons whose output projection onto v shifts sign or magnitude across depth. Not the old 3-axis framing — now about per-layer signed attribution per neuron, tracking the SAME neuron across depth |
+| **P2 — completion** | Idea 4 — Multi-rank frequency subspace | Queued; needs GPU | 3-5 days | User-flagged: "is frequency 1D or multi-D?" Extract rank-k SVD of class-mean difference. Train continuous log-freq regression probe; compare rank-1 vs rank-k AUROC. If rank-k substantially better: frequency has 1D linear discriminator + additional geometry for within-class structure (token vs bigram vs document frequency) |
+| **P3 — speculative** | Idea F — Cross-direction interference (freq + semantic composition) | Queued; needs GPU | 2-3 days | Steer along `α_freq·v_freq + α_sem·v_semantic`; test linear composition |
+| **P3 — speculative** | Idea D — Dual-route reading analogy | Research design | — | Cognitive-science analogy, hard to test rigorously — park |
+| **Deprioritized** | Pythia checkpoint sweep | Parked — see §9 | — | Pythia de-emphasized as mid-training / unstable |
+
+### 6.1 P0 experiments in flight
+
+**Idea C — b_LN alignment test (dispatched as `ani-bln-alignment-3m`)**
+One-line prediction: `W_U @ v` aligns with the model's learned unigram (for RMSNorm models) and with `b_LN` (for Pythia). If cosine > 0.5: unifies our direction with Kobayashi 2023 (one pathway, two access points). If orthogonal: two independent frequency pathways (explains the cumulative-ablation-low-KL dissociation). CPU-only job; results in hours.
+
+**Track QKV reader (dispatched as `ani-qkv-reader-3m-sjwdx`)**
+Computes `|v · W_{Q,K,V}^h_row|` per head per layer vs random-direction null. If some heads materially exceed null → we have candidate readers; circuit story gets a complement. If none do → strong evidence for "write-only" feature (no reader, no computational use).
+
+**Idea E — active eraser re-analysis (done Apr 18)**
+Finding: Llama late-layer freq-signal magnitude GROWS monotonically from peak to final-1 layer; OLMo and Pythia show more complex trajectories. All 3 models show a sharp drop at the **final layer (L31)** right before unembedding — prediction-head-related erasure. This is new empirical detail for the circuit story.
+
+### 6.2 P1 experiments to dispatch next
+
+**Idea 2 — Frequency-sensitive task KL.** The cumulative-ablation "small KL" (0.001-0.025) was measured on ScaleJSD synonym-pair prompts, which are *frequency-neutral by design*. Re-run on frequency-sensitive prompt distributions:
+- **BC5CDR** (biomedical NER, rare medical entities): KL expected to jump substantially
+- **WikiLarge** / ASSET (text simplification benchmarks, known frequency-sensitive task)
+- **GYAFC** (formal ↔ informal register, frequency-adjacent)
+- **Zipf-tail next-word prediction**: constructed contexts where the expected continuation is in the tail 10% of unigram distribution
+Converts "small KL" from liability to feature-specificity proof. Expected outcome: 10-100× KL on freq-sensitive prompts.
+
+**Idea 3 — Frequency direction = log unigram probability.** Correlate per-token residual-projection `<x_L*, v>` with external corpus-derived `log P(token)` (from wikitext or Pile). One forward pass + one scatter plot per model. If r > 0.8: frequency direction IS a learned code-length axis. This would:
+- Make the mathematical claim precise (information-theoretic, not vague "encodes frequency")
+- Unify with entropy-coding view of LM training (cross-entropy = arithmetic coding)
+- Provide a clean theoretical grounding for the rest of the paper
+
+**Idea 8 — Full dependency graph of v via path patching.** Complement to QKV weight test. For every downstream (layer, component), measure whether its activation changes when v-component is projected out at L*. Gold-standard test from Goldowsky-Dill 2023.
+
+**Idea 6 — Universal-feature taxonomy.** Position paper framing: plot known concept directions on 3 axes:
+1. Probe AUROC universality across architectures
+2. Write-site pattern (attention-dominant / MLP-dominant / mixed) — our Track Circuits data
+3. Causal-effect ratio at unit steering (KL @ α=1 / AUROC)
+
+Known points: Refusal (Arditi 2024, attention-dominant writers), Function vectors (Todd 2024, attention-only writers), Truth (Marks 2023, layer-patched not component-decomposed), Sentiment (Tigges 2024, LR-probe steering on Pythia), Frequency (our work, MLP-dominant writers). The taxonomy claim: *write-site is concept-dependent, not architecture-dependent*. This is the single most novel cross-paper claim we have after the literature scoop check.
+
+**Idea G — Reorganization probes.** At every layer in OLMo/Llama/Qwen, train probes for: frequency, semantic domain (5), sentiment, syntactic role, formality, truthfulness. Stack the trajectories. Test whether the "frequency erasure" is a rotation (semantic gain = freq loss in a zero-sum sense) or a more complex reorganization. Answers §4.3 + §4.4 simultaneously.
+
+### 6.3 P2 completion experiments
+
+**Idea A — Symmetric semantic-direction ablation.** Mirror of frequency ablation. For each of 5 ScaleJSD domain directions: rank-1 ablate, measure that domain's probe AUROC crash + output KL + cross-effect on frequency probe AUROC. Settles the orthogonality claim (E0.2 showed cos ≈ 0.02; this is the causal test).
+
+**Idea B — Semantic-direction steering.** Can a domain direction produce a topic-shift analog of frequency's FK-shift? If steering α_medical > 0 → more medical vocabulary in generation: multi-knob compositional style control. If effect is zero: domain directions are shadow, frequency is the only steerable axis.
+
+**Idea 1 — Translator neurons (reframed).** In the 1D subspace framework: identify MLP neurons whose signed output projection onto v transitions across depth (e.g., positive contribution in early layers, negative in late layers, or vice versa). Predict these sit at the layers where freq AUROC peaks and starts declining. Causal test: ablating these specific neurons should differentially affect frequency vs. semantic probes.
+
+**Idea 4 — Multi-rank frequency subspace.** The user-flagged question: *is frequency 1D or higher-dimensional?* Our rank-1 probe AUROC is 0.98, which is near-saturated — but the probe is trained on BINARY high-vs-low discrimination. Multi-rank test:
+- Train continuous `log P(token)` regression probes (rank-1, rank-4, rank-16, rank-64)
+- Compare R² on held-out tokens
+- Extract rank-k SVD of class-mean difference; check if singular values have a sharp drop (1D) or plateau (multi-D)
+- Test orthogonality across frequency granularities: token-level vs bigram-level vs document-level frequencies  
+If rank-k is substantially better than rank-1: frequency has **a rank-1 linear discriminator (what we found) + additional geometric structure** (what we'd find). This is valid as a scientific direction because rank-1 works for classification doesn't mean the underlying representation is 1D.
+
+### Legacy prioritization (from pre-Apr-18; superseded by 6.0-6.3 above)
+
 
 ### Direction 1 — **Unify the five frequency findings** (HIGHEST NOVELTY, HIGHEST FEASIBILITY)
 
@@ -422,3 +617,66 @@ Manuscript materials:
 - `neurips-2026/notes/coverage-principle-experiment-design.md` — design doc for abandoned framework
 - `neurips-2026/notes/workshop-review.md` — reviewer feedback on the workshop paper
 - `neurips-2026/manuscript/rough-draft.md` — **STALE** — tells the old "specialist neurons / three-axes" story. Needs rewrite once §4/§6 experiments complete.
+
+---
+
+## 9. Model scope policy (Apr 18, 2026 decision)
+
+### Primary target models for venue-grade claims
+
+- **OLMo-7B-hf** — fully trained, open-source, permissive license, residual-stream RMSNorm architecture
+- **Llama-3.1-8B** — fully trained, modern mainstream model, RMSNorm
+- **Qwen-2.5-7B** (to add) — modern mainstream model, high-quality training, useful as a third architecture
+
+### Deprioritized
+
+- **Pythia-6.9B (step 143000)**: considered mid-training and unstable. Included in existing results but will not be the central figure in main-text claims.
+- **Pythia-70M / Pythia-1B**: legacy, retained for training-dynamics claims only (not for behavioral/steering claims).
+- **Pythia checkpoint sweep** (was queued): **deprioritized**. The "Pythia-dead steering" finding from Track 4 is mentioned as an observation in supporting material, not as a central mechanistic finding.
+
+### Rationale
+
+1. **Reviewer-facing credibility**: Pythia is rarely used in current steering / circuit-level papers (Braun 2026, Arditi 2024 refusal, Tigges 2024 sentiment all use Llama family for primary claims). Making Pythia-dead a central finding would draw criticism that the result is a Pythia-training artifact rather than a general phenomenon.
+2. **Step143000 is mid-pretraining** (full Pythia training is 300B tokens; step143000 is ~143k × batch-size-1024 ≈ 150B tokens). Register / lexical-style knobs may simply not have emerged yet.
+3. **Effort allocation**: time spent understanding why Pythia is anomalous is better spent adding Qwen-2.5-7B as a third clean test point for the universality claims.
+
+### Action items from this decision
+
+- Dispatch Qwen-2.5-7B runs of Track 4 (steering metrics), Track Circuits, Idea C, Idea E, QKV reader — same protocol
+- In the paper write-up, state the model scope policy explicitly to preempt reviewer questions
+- Retain Pythia results in appendix / supplementary material where they don't confuse the main narrative
+
+---
+
+## 10. Literature update (Apr 18, 2026) — post-track scoop check
+
+Two parallel alphaxiv literature checks (steering + circuits) completed Apr 17/18. Key findings:
+
+### 10.1 Scoops to acknowledge
+
+- **Braun, Eickhoff, Bahrainian — "Beyond Multiple Choice: Steering Vectors for Summarization"** (arXiv 2505.24859, EACL 2026 Findings) **already demonstrated CAA-based single-vector readability steering on Llama-3.2-1B/3B/3.1-8B** with monotonic FK/DeBERTa response. Our "deployable single-vector simplification primitive" framing is taken. **Must cite and differentiate.**
+- **Liu, Ye, Xing, Zou — "In-Context Vectors" (ICML 2024)** demonstrated single-vector style/formality control on Llama/Falcon-7B. Smallest prior to "single direction controls register."
+- **Arditi et al. 2024 "Refusal direction"** (arXiv 2406.11717) already uses the DFA attribution recipe we used on refusal; found **attention-head-dominant writers**. Our MLP-dominant finding is concept-dependent, not method-dependent.
+
+### 10.2 What's genuinely novel after scoop check
+
+1. **Frequency-anchored probe extraction**: our steering vector is derived from high/low token-frequency contrasts on matched-template ScaleJSD data. Braun 2026 and ICV use readability- or formality-labeled sentence pairs. We're the first to derive the steering vector from **pretraining-corpus frequency statistics** rather than behavioral labels.
+2. **Concept-dependent write-site pattern**: refusal (Arditi) is attention-dominant; function vectors (Todd) are attention-only; frequency (us) is MLP-dominant. This cross-paper comparison is novel — write-site is a property of the concept, not the architecture. Foundation for Idea 6 (universal-feature taxonomy).
+3. **Decodability vs. steerability dissociation**: probe AUROC 0.98 universal, but steering effect sizes differ substantially (stronger in modern LMs, weaker in Pythia-6.9B step143000). Cf. Tigges 2024 showed sentiment steering WORKS on Pythia — so the dissociation is specific to what we're steering, not a universal Pythia artifact.
+4. **Idea E novel empirical finding (Apr 18 re-analysis)**: in Llama-3.1-8B, frequency-signal magnitude in the residual stream grows monotonically through all layers even while probe AUROC declines. This is a **clean mechanistic distinction between active erasure (Pythia, OLMo) and passive dilution (Llama)** — rank-growth of competing features, not destruction of the frequency signal.
+
+### 10.3 Revised paper thesis (post-scoop)
+
+> **"Probe decodability does not predict steering responsiveness. For the token-frequency direction, we show: (1) the write-site pattern (MLP-dominant, no attention writers) is qualitatively different from prior concept-direction analyses (refusal: attention-dominant; function vectors: attention-only), so write-site is concept-dependent, not architecture-dependent. (2) Probe AUROC is 0.97–0.99 and universal across OLMo/Llama/Pythia; but behavioral steering (Flesch-Kincaid grade shift, register control) is large in modern LMs and near-dead in Pythia. (3) Late-layer AUROC decline is passive dilution (competing features growing) in Llama, and active erasure in OLMo and Pythia. (4) All models share a final-layer (L31) sharp drop — consistent with a prediction-head/b_LN pathway specifically at the final layer."**
+
+### 10.4 Must-cite list (new, post-scoop)
+
+1. Braun, Eickhoff, Bahrainian 2026 (EACL Findings) — closest competitor; differentiate on frequency-anchored probe extraction and write-site pattern
+2. Liu, Ye, Xing, Zou — ICV (ICML 2024) — precedent for single-vector style control
+3. Rimsky et al. — CAA (ACL 2024) — canonical contrastive steering
+4. Tigges et al. 2023 — LR-probe steering template
+5. Kobayashi et al. 2023 — b_LN frequency finding (central to Idea C unification)
+6. Stolfo et al. 2024 — token-frequency neurons (interpretive prior)
+7. Arditi et al. 2024 — refusal direction (method precedent + write-site contrast)
+8. Todd et al. 2024 — function vectors (attention-only writers, further write-site contrast)
+9. Marks & Tegmark 2023 — truth direction (functional-direction comparison reference)
