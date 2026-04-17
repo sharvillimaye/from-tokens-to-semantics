@@ -323,22 +323,23 @@ class AttributionHooks:
             o_proj, _ = _find_o_proj(attn_module)
             mlp_module, _ = find_mlp_module(layer)
 
-            # Capture o_proj INPUT (this is the per-head concat), retain gradient.
+            # Capture o_proj INPUT (this is the per-head concat). Only retain_grad
+            # if gradients are being tracked (not under no_grad).
             def make_attn_hook(idx):
                 def hook(mod, inp, out):
                     x = inp[0] if isinstance(inp, tuple) else inp
-                    # We want a leaf-like tensor we can grad against. Register
-                    # a hook with retain_grad and stash the activation.
-                    x.retain_grad()
+                    if x.requires_grad:
+                        x.retain_grad()
                     self.attn_z_in[idx] = x
                 return hook
             self.hooks.append(o_proj.register_forward_hook(make_attn_hook(L)))
 
-            # Capture mlp output, retain gradient.
+            # Capture mlp output, retain gradient when tracking grads.
             def make_mlp_hook(idx):
                 def hook(mod, inp, out):
                     y = out[0] if isinstance(out, tuple) else out
-                    y.retain_grad()
+                    if y.requires_grad:
+                        y.retain_grad()
                     self.mlp_z[idx] = y
                 return hook
             self.hooks.append(mlp_module.register_forward_hook(make_mlp_hook(L)))
