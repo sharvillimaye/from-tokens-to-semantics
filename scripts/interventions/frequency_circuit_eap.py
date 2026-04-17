@@ -250,12 +250,16 @@ def find_peak_probe_layer(
     for L in layers:
         v, auroc = _cv_probe(per_layer_X[L], freq_labels, pair_ids)
         layer_aurocs[L] = auroc
-        if auroc > best_auroc:
+        if not np.isnan(auroc) and auroc > best_auroc:
             best_auroc = auroc
             best_L = L
             best_v = v
         print(f"    L{L}: freq_auroc={auroc:.3f}", flush=True)
-    assert best_v is not None
+    if best_v is None:
+        raise RuntimeError(
+            f"No layer yielded a valid probe (all NaN). "
+            f"Check class balance in samples. "
+            f"n_hi={int(freq_labels.sum())}, n_lo={int((1-freq_labels).sum())}")
     return best_L, best_auroc, layer_aurocs, best_v
 
 
@@ -675,12 +679,22 @@ def main():
         all_samples.extend(s)
     print(f"Total samples: {len(all_samples)}", flush=True)
 
-    # Cap for budget (keeping class balance via stride)
+    # Cap for budget while preserving class balance (high/low pairs).
+    # Samples come from pairs_to_samples as [hi0,lo0,hi1,lo1,...]; keep whole pairs.
     if len(all_samples) > args.max_samples:
-        # stride sample preserves high/low pair ordering
-        stride = len(all_samples) // args.max_samples
-        all_samples = all_samples[::max(1, stride)][:args.max_samples]
-        print(f"Subsampled to {len(all_samples)} for budget", flush=True)
+        n_pairs_keep = max(1, args.max_samples // 2)
+        n_total_pairs = len(all_samples) // 2
+        step = max(1, n_total_pairs // n_pairs_keep)
+        kept: List[Dict[str, Any]] = []
+        for pi in range(0, n_total_pairs, step):
+            kept.append(all_samples[2 * pi])      # hi
+            kept.append(all_samples[2 * pi + 1])  # lo
+            if len(kept) >= args.max_samples:
+                break
+        all_samples = kept
+        n_hi = sum(1 for s in all_samples if s["frequency_category"] == "high_freq")
+        print(f"Subsampled to {len(all_samples)} ({n_hi} hi / "
+              f"{len(all_samples) - n_hi} lo) for budget", flush=True)
 
     try:
         n_hidden = int(model.config.num_hidden_layers)
