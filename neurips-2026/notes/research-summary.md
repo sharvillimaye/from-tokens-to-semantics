@@ -161,9 +161,17 @@ PopQA 2000 questions per model, greedy-decoded correctness.
 
 Consistent negative correlation: high freq-direction activation → more likely to hallucinate. Statistically real in all 3 models; strongest on mid-rarity Q3 slice. AUC below answer-logprob baseline → usable as auxiliary feature, not standalone detector.
 
-#### Track QKV reader — pod running (dispatched Apr 17)
+#### Track QKV reader — ✅ COMPLETE (Apr 18, pod `ani-qkv-reader-3m-sjwdx`, 119 min CPU)
 
-CPU-only job `ani-qkv-reader-3m-sjwdx`. Computes `|v · W_{Q,K,V}^h_row|` for every head at every layer L > L*, compared to random-direction null. Detects whether any attention head READS v via its Q/K/V projections (attribution patching only detects writers).
+**Result: READERS EXIST.** Attention heads with W_{Q,K,V} rows significantly aligned with v (p99 null cos ≈ 0.062):
+
+| Model | % Q-heads above null | % K-heads | % V-heads | Top max_cos (Q) |
+| --- | --- | --- | --- | --- |
+| OLMo-7B | **62%** (239/384) | 59% | 29% | L28 h19: 0.260 |
+| Llama-3.1-8B | 14% (110/768) | 42% | 24% | L10 h6: 0.181 |
+| Pythia-6.9B | 21% (130/608) | 29% | 25% | L16 h26: 0.167 |
+
+Top readers concentrate in the immediate-downstream band (L*+1 to L*+5) with a secondary tail in final layers (L28-L30). **Fundamentally revises the mechanistic picture** — our earlier "no reader → shadow feature" inference was wrong. See §4.6 for full interpretation.
 
 #### Idea C (b_LN alignment) — ✅ COMPLETE (Apr 18, pod `ani-bln-alignment-3m-wh9bb`)
 
@@ -265,10 +273,41 @@ They are essentially orthogonal (|cos| < 0.15 in all models). When we ablate `v`
 
 This is a **clean mechanistic finding that unifies**: (a) our cumulative-ablation low-KL observation (§2.2), (b) Kobayashi 2023's b_LN = frequency direction result, and (c) our Track 4 steering result (steering `v` produces register / FK shifts = internal-representation behavior, separate from b_LN-driven output frequency statistics). **Cite: Kobayashi et al. 2023 (arXiv:2305.18294) as establishing the prediction-head pathway; we establish the orthogonal residual-stream pathway.**
 
-### 4.6 Do attention heads read v? 🟡 DISPATCHED (QKV reader)
-**Status**: CPU-only job `ani-qkv-reader-3m-sjwdx` running. Direct weight-space test of reader heads via `|v · W_{Q,K,V}^h_row|` compared to random-direction null.
+### 4.6 Do attention heads read v? ✅ ANSWERED — READERS EXIST (QKV reader, Apr 17/18)
 
-**Motivation**: Attribution patching (Track Circuits) measures output differential — does the component WRITE in v's direction. Heads could still READ from v through Q/K/V projections without their output projecting onto v. This is the explicit reader test.
+**Finding — readers are abundant, concentrated just downstream of L***. Direct weight-space test of `|v · W_{Q,K,V}^h_row|` compared to a matched-norm random-direction null (100 random unit vectors; p99 cos threshold ≈ 0.062).
+
+| Model | L* | # heads significant (Q/K/V) | % of heads reading via Q | Top head max_cos |
+| --- | --- | --- | --- | --- |
+| **OLMo-7B** | L19 | 239/384 / 226/384 / 112/384 | **62% of Q-heads above null** | L28 h19 Q: 0.260 |
+| **Llama-3.1-8B** | L7 | 110/768 / 80/192 / 46/192 | 14% of Q-heads above null | L10 h6 Q: 0.181 |
+| **Pythia-6.9B** | L12 | 130/608 / 174/608 / 149/608 | 21% Q, 29% K, 25% V | L16 h26 Q: 0.167 |
+
+p99 null cos = 0.062. Expected false-positive rate = 1% (≈ 4 heads per model). Observed: 14-62% — **orders of magnitude above chance**, in all three models.
+
+**Concentrated readers** (top heads by max_cos, all layers strictly > L*):
+- **OLMo-7B**: L20, L21, L24, L28 — heads in the L20-L28 band
+- **Llama-3.1-8B**: L9, L10, L11 — heads immediately downstream of L*=7
+- **Pythia-6.9B**: L14-L16 — same immediate-downstream pattern
+
+The strongest readers are in the **immediate-downstream band (L* → L*+5)**; a second tail extends to the final layers (L28-L30).
+
+**This revises the mechanistic picture dramatically.** Our earlier inference "no reader — hence shadow" was WRONG. The correct picture:
+
+1. **Write**: distributed MLPs in L0 → L\* (Track Circuits) write v into residual stream
+2. **Read**: attention heads in L > L\* read v through **Q/K projections** (decide *where to attend* partly based on frequency information). Max per-head cos 0.17-0.26 — modest but robust alignment, well above null
+3. **Output pathway is separate**: output frequency statistics are handled by the b_LN / learned-unigram pathway, which is **orthogonal** to v in vocabulary space (Idea C: |cos| ≤ 0.15 across all 3 models)
+
+**Why this reconciles previously contradictory findings**:
+- Cumulative ablation kills probe AUROC (obviously — we're ablating) but preserves output KL (small). **Not because "no reader"** — because the readers propagate v's information through Q/K routing decisions, which influence the full downstream computation but don't linearly bias output logits; and because the orthogonal b_LN pathway handles output frequency statistics independently.
+- Steering v produces FK / register shifts (Track 4). **Now explained**: steering changes *where downstream heads attend* (via Q/K), which changes the semantic/positional content they aggregate, which manifests as register shifts downstream. This is upstream-computation modulation, not direct logit bias.
+- The write-site is MLP-dominant (Track Circuits) and the read-site is attention-dominant. This is a **cleanly asymmetric write/read pattern** — potentially a more publishable circuit finding than either half alone.
+
+**Paper framing**: the frequency direction is **written by many MLPs, read by many attention heads (via Q/K), and used as an upstream computation-routing signal rather than a direct logit-bias mechanism. The logit-bias pathway for frequency is a separate b_LN-aligned direction.**
+
+**Caveats**:
+- Weight-space alignment (cos 0.17-0.26) is correlative — it says the head *could* use v. Full causal verification would need path patching or activation-space ablation. Queued as Idea 8.
+- The "62% of heads" statistic for OLMo is striking but modest in magnitude — most reading heads are marginally above the p99 null. The clean signal is the top-20 heads per model, concentrated in the immediate-downstream band.
 
 ---
 
