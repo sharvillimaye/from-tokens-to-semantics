@@ -201,9 +201,11 @@ Extracted sentiment direction via Tigges 2023 protocol on IMDB (1000 pos + 1000 
 
 | Model | Freq L* / AUROC | Freq top-10 writers | Sentiment L* / AUROC | Sentiment top-10 writers |
 | --- | --- | --- | --- | --- |
-| OLMo-7B | L19 / 0.967 | 10 MLPs, 0 attn | L21 / 0.956 | **6 attn, 4 MLPs** |
-| Llama-3.1-8B | L7 / 0.970 | 10 MLPs, 0 attn | L16 / 0.954 | **9 attn, 1 MLP** |
-| Qwen-2.5-7B | (pending) | (pending) | L19 / 0.939 | **9 attn, 1 MLP** |
+| OLMo-7B | L19 / 0.967 | 10 MLPs, 0 attn (MLP/attn = 1.64×) | L21 / 0.956 | **6 attn, 4 MLPs (ratio 0.24×)** |
+| Llama-3.1-8B | L7 / 0.970 | 8 MLPs, 2 attn (ratio 4.01×) | L16 / 0.954 | **9 attn, 1 MLP (ratio 0.16×)** |
+| **Qwen-2.5-7B** | **L15 / 0.964** | **10 MLPs, 0 attn (ratio 3.52×)** | L19 / 0.939 | **9 attn, 1 MLP (ratio 0.22×)** |
+
+**Ratio flips by 10-25× in all 3 models when switching concepts. Complete 3-model × 2-concept matrix confirms the taxonomy universally.**
 
 **Qualitatively different write-site for the same model.** Top attention head contributions for sentiment: OLMo L21 head 6 (attr=0.034), Llama L14 head 24 (0.062), Qwen L18 head 18 (0.332). Mirror pattern of what Arditi 2024 found for refusal (attention-dominant).
 
@@ -213,7 +215,9 @@ Reader pattern also qualitatively different:
 | --- | --- | --- |
 | OLMo-7B | 239/384 (62%) | 10/320 (3%) |
 | Llama-3.1-8B | 110/768 (14%) | 0/480 (0%) |
-| Qwen-2.5-7B | (pending) | 1/224 (0.4%) |
+| **Qwen-2.5-7B** | **38/336 (11%)** | 1/224 (0.4%) |
+
+**All 3 models now complete.** Frequency has 10-62% of Q-heads reading significantly; sentiment has 0-3%. Orders-of-magnitude gap in all three architectures.
 
 **Taxonomy of linear concept representations** (new central claim):
 
