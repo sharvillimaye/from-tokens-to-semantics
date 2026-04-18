@@ -132,14 +132,18 @@ class CumulativeAblationHook:
 #  Prompt distributions
 # ─────────────────────────────────────────────────────────────────────
 
-def _load_popqa_tail(n_prompts: int, max_popularity: int = 5) -> List[str]:
+def _load_popqa_tail(n_prompts: int, max_popularity: int = 100) -> List[str]:
     """Load rare-entity QA prompts from PopQA tail.
 
     PopQA columns: id, subj, prop, obj, subj_id, prop_id, obj_id, s_aliases,
     o_aliases, s_uri, o_uri, s_wiki_title, o_wiki_title, s_pop, o_pop,
     question, possible_answers.
 
-    "Tail" = subject popularity < max_popularity.
+    "Tail" = subject Wikipedia monthly pageview popularity < max_popularity.
+    PopQA's s_pop is roughly log-scaled Wikipedia pageviews; <100 is the
+    standard 'tail' cutoff (Mallen et al. 2023). We rank the whole split
+    by s_pop ascending and take the lowest-popularity prompts so we always
+    get exactly n_prompts even if the raw threshold is very strict.
     """
     try:
         from datasets import load_dataset
@@ -153,23 +157,26 @@ def _load_popqa_tail(n_prompts: int, max_popularity: int = 5) -> List[str]:
         print(f"  PopQA load failed: {e}")
         return []
 
-    prompts: List[str] = []
+    rows: List[Tuple[float, str]] = []
     for row in ds:
         pop = row.get("s_pop")
-        if pop is None:
+        question = row.get("question")
+        if pop is None or not question:
             continue
         try:
             pop_f = float(pop)
         except (TypeError, ValueError):
             continue
-        if pop_f >= max_popularity:
-            continue
-        question = row.get("question")
-        if not question:
-            continue
-        prompts.append(f"Q: {question.strip()} A:")
-        if len(prompts) >= n_prompts:
-            break
+        rows.append((pop_f, question.strip()))
+
+    rows.sort(key=lambda r: r[0])  # ascending popularity → tail first
+    cutoff = [r for r in rows if r[0] < max_popularity]
+    pool = cutoff if len(cutoff) >= n_prompts else rows
+    print(f"    PopQA: {len(rows)} rows total, "
+          f"{len(cutoff)} below max_pop={max_popularity}, "
+          f"taking {min(len(pool), n_prompts)}")
+
+    prompts = [f"Q: {q} A:" for _, q in pool[:n_prompts]]
     return prompts
 
 
@@ -343,7 +350,9 @@ def main():
     parser.add_argument("--steer-layer", type=int, default=None,
                         help="Layer to extract v at. Default: mid-stack.")
     parser.add_argument("--n-prompts-per-dist", type=int, default=200)
-    parser.add_argument("--popqa-max-pop", type=int, default=5)
+    parser.add_argument("--popqa-max-pop", type=int, default=100,
+                        help="PopQA s_pop cutoff for 'tail'. If too strict, "
+                             "we fall back to the n_prompts_per_dist lowest-pop rows.")
     parser.add_argument("--max-prompt-tokens", type=int, default=256)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
