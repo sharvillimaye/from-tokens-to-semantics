@@ -308,7 +308,20 @@ We have characterized the **representation** (1D direction, distributed writers,
 ### 4.2 Who maintains? ✅ PARTIALLY ANSWERED (Track Circuits recovery)
 **Finding**: No active maintenance. Single-layer ablation produces **Δ ≈ -0.5 to -1.0** in downstream M_diff and the signal does not recover across 10+ downstream layers. This differs from the workshop-paper observation on Pythia-6.9B (0.46 → 0.75 recovery) — likely because that measurement was probe-AUROC-based and confounded by dilution, not magnitude-based.
 
-### 4.3 Who erases? ✅ PARTIALLY ANSWERED (Idea E, Apr 18)
+### 4.3 Who erases? ✅ REVISED (Idea E + Idea G partial data, Apr 18)
+
+**Important correction (2026-04-18 per in-conversation pushback)**: The "learned erasure" narrative from the workshop paper was based on Pythia-70M where AUROC drops 0.876 → 0.566 across 4 layers — a clear gradual decline. In the 7B+ models we're now using, **there is NO gradual decline**. Instead:
+
+| Model | Peak AUROC | AUROC at L27-L30 | AUROC at L31 | Pattern |
+| --- | --- | --- | --- | --- |
+| Pythia-70M | 0.876 (L2) | — | 0.566 (L5) | Gradual 4-layer decline |
+| OLMo-7B | 0.97 plateau | 0.94-0.95 | **0.840** | **Stable, one-layer crash at L31** |
+| Llama-3.1-8B | ~0.97 | ~0.94 | similar pattern | **Stable, one-layer crash at L31** |
+| Qwen-2.5-7B | 0.964 (L15) | ~0.91 | similar | **Stable, one-layer crash at L31** |
+
+**Revised claim**: In 7B+ models, frequency is STABLE in the residual stream across ~28 intermediate layers, then transformed sharply at the single final layer (L31) right before unembedding. This is NOT gradual erasure; it is a **prediction-head handoff**. The final layer's transformation coincides with where b_LN activates, consistent with Idea C's finding that v is orthogonal to b_LN in vocabulary space — the residual pathway (stable v) and the head pathway (b_LN) meet only at the unembedding step.
+
+**This revises the paper's "frequency erasure" framing**. The routing concept lives stably in the residual stream; the output frequency statistics are handled by an orthogonal b_LN pathway that activates only at the final layer.
 **Finding**: Model-dependent.
 - **Llama-3.1-8B**: PASSIVE DILUTION. M_diff magnitude grows monotonically through all layers. AUROC decline is a relative-norm phenomenon — competing features grow faster than the frequency signal.
 - **OLMo-7B**: HYBRID. M_diff grows to L28 then crashes at L31 (final layer).
