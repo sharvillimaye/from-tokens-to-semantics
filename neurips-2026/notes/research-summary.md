@@ -193,6 +193,53 @@ Top readers concentrate in the immediate-downstream band (L*+1 to L*+5) with a s
 
 **Interpretation**: The frequency direction at L* encodes a linear function of log P(token | prediction context), with R² ≈ 0.5. This is the **conditional** code-length axis — it is what an arithmetic-coding-aware representation would look like at decoding points. It provides strong information-theoretic grounding for the rest of the paper: cross-entropy training implicitly implements arithmetic coding, and here we see the underlying geometric axis. Complements Idea C (which showed this internal axis is ORTHOGONAL to the output-side b_LN unigram pathway — two independent frequency mechanisms, one upstream conditional, one downstream marginal).
 
+#### Sentiment-control (Idea 6) — ✅ COMPLETE on OLMo/Llama/Qwen (Apr 18, pod `ani-sentiment-3m-ghbfg`)
+
+**Central finding: write-site pattern is concept-dependent — the strongest empirical claim of the paper.**
+
+Extracted sentiment direction via Tigges 2023 protocol on IMDB (1000 pos + 1000 neg, last-token residual probe). Trained sentiment probe per layer, ran SAME signed DFA attribution pipeline + QKV reader test as the frequency analysis. Direct head-to-head.
+
+| Model | Freq L* / AUROC | Freq top-10 writers | Sentiment L* / AUROC | Sentiment top-10 writers |
+| --- | --- | --- | --- | --- |
+| OLMo-7B | L19 / 0.967 | 10 MLPs, 0 attn | L21 / 0.956 | **6 attn, 4 MLPs** |
+| Llama-3.1-8B | L7 / 0.970 | 10 MLPs, 0 attn | L16 / 0.954 | **9 attn, 1 MLP** |
+| Qwen-2.5-7B | (pending) | (pending) | L19 / 0.939 | **9 attn, 1 MLP** |
+
+**Qualitatively different write-site for the same model.** Top attention head contributions for sentiment: OLMo L21 head 6 (attr=0.034), Llama L14 head 24 (0.062), Qwen L18 head 18 (0.332). Mirror pattern of what Arditi 2024 found for refusal (attention-dominant).
+
+Reader pattern also qualitatively different:
+
+| Model | Freq significant Q-readers | Sentiment significant Q-readers |
+| --- | --- | --- |
+| OLMo-7B | 239/384 (62%) | 10/320 (3%) |
+| Llama-3.1-8B | 110/768 (14%) | 0/480 (0%) |
+| Qwen-2.5-7B | (pending) | 1/224 (0.4%) |
+
+**Taxonomy of linear concept representations** (new central claim):
+
+- **Routing concepts** (frequency): MLP-written, attention-Q/K-read. Modulate *where* attention looks. Intervention affects routing, not logits.
+- **Aggregation concepts** (sentiment, refusal [Arditi], function vectors [Todd]): attention-written (aggregation from content positions), rarely read. Used as output-bearing representations. Intervention affects output directly.
+
+Paper positions as **"a taxonomy of linear concepts: routing vs aggregation, with frequency as the first major published routing concept."** Not just a frequency paper.
+
+#### Idea 2 (frequency-sensitive task KL) — ✅ COMPLETE on 3 models (Apr 18, pod `ani-freq-sensitive-kl-3m-bcllp`)
+
+**Partial/mixed result — original prediction of 10-100× KL inflation FAILED; revised interpretation is position-selective, not task-selective.**
+
+Cumulative rank-1 ablation of v across all layers, measuring KL(clean || ablated) at last-position on 4 prompt distributions.
+
+| Model | PopQA-tail median | ScaleJSD-baseline median | Ratio (median) | Ratio (p99) |
+| --- | --- | --- | --- | --- |
+| OLMo-7B | 0.0117 | 0.0133 | 0.88× | 2.5× |
+| **Llama-3.1-8B** | **0.157** | **0.050** | **3.1×** | **5.5×** |
+| Qwen-2.5-7B | 0.0099 | 0.019 | 0.52× | 0.63× |
+
+**Interpretation**: only Llama shows predicted inflation (3-5× on PopQA). OLMo and Qwen show the OPPOSITE. This is a position-selectivity finding, not a task-selectivity finding — the frequency direction is used at specific *positions* (anchor tokens in ScaleJSD), not globally across all frequency-sensitive *tasks*. PopQA questions end at "Q: ... A:" which isn't a frequency-decision position.
+
+Note: scalejsd_rare_word, scalejsd_common_word, and scalejsd_baseline are nearly identical in all 3 models — confirms that within-ScaleJSD the KL is position-invariant across rare/common tokens (probe was trained across both).
+
+**Paper framing**: "the frequency direction's effect is positional (concentrated at token-prediction anchor points), not task-general. Cumulative ablation on arbitrary prompts produces small KL because only ~5% of positions in a prompt are frequency-decision points for our probe."
+
 #### Idea C (b_LN alignment) — ✅ COMPLETE (Apr 18, pod `ani-bln-alignment-3m-wh9bb`)
 
 | Model | `cos(u, log P_model)` | Spearman ρ | `b_LN` available? |
