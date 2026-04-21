@@ -103,28 +103,37 @@ def create_activation_record(checkpoint_step: str,
                            phrase_end_idx: int,
                            activation_vector: np.ndarray,
                            pre_activation_vector: Optional[np.ndarray] = None,
+                           mlp_input_vector: Optional[np.ndarray] = None,
                            neuron_idx: Optional[int] = None,
                            activation_type: str = 'relu',
+                           pair_id: Optional[str] = None,
                            **kwargs) -> Dict[str, Any]:
-    """Create a structured activation record with both pre and post activation vectors"""
-    
+    """Create a structured activation record with pre/post activation and MLP input vectors.
+
+    Args:
+        activation_vector: Layer output (post-MLP + residual).
+        pre_activation_vector: MLP up-projection output (for spline codes).
+        mlp_input_vector: Residual stream entering MLP (H-dim). Used for
+            Euclidean distance in polytope density computation.
+        pair_id: Identifier linking this record to its synonym partner.
+    """
+
     # Analyze POST-activation vector (main activation vector)
     cett_threshold = compute_cett_threshold(activation_vector, 0.01)
     binary_pattern = (np.abs(activation_vector) > cett_threshold).astype(int)
     sparsity = np.sum(binary_pattern) / len(binary_pattern)
     activation_norm = np.linalg.norm(activation_vector)
     n_active_neurons = np.sum(binary_pattern)
-    
+
     # Analyze PRE-activation vector and compute spline code from it
     pre_activation_analysis = {}
     spline_code = None
     if pre_activation_vector is not None:
         pre_cett_threshold = compute_cett_threshold(pre_activation_vector, 0.01)
         pre_binary_pattern = (np.abs(pre_activation_vector) > pre_cett_threshold).astype(int)
-        
-        # Spline code: binary pattern based on activation function type
+
         spline_code = _compute_spline_code_for_activation(pre_activation_vector, activation_type)
-        
+
         pre_activation_analysis = {
             'pre_activation_vector': pre_activation_vector,
             'pre_binary_pattern': pre_binary_pattern,
@@ -132,16 +141,15 @@ def create_activation_record(checkpoint_step: str,
             'pre_activation_norm': np.linalg.norm(pre_activation_vector),
             'pre_n_active_neurons': np.sum(pre_binary_pattern),
             'pre_cett_threshold': pre_cett_threshold,
-            'spline_code': spline_code  # Sign-based binary pattern from pre-activation
+            'spline_code': spline_code
         }
-    
+
     record = {
         'checkpoint_step': checkpoint_step,
         'sample_idx': sample_idx,
         'phrase': phrase,
         'sentence': sentence,
         'frequency_category': frequency_category,
-        # Canonical category label used by downstream analyzers
         'category': (
             'high_freq' if str(frequency_category).strip().lower() in {
                 'high_frequency', 'highfreq', 'high-freq', 'high'
@@ -154,7 +162,8 @@ def create_activation_record(checkpoint_step: str,
         'activation_target_idx': activation_target_idx,
         'phrase_start_idx': phrase_start_idx,
         'phrase_end_idx': phrase_end_idx,
-        
+        'pair_id': pair_id,
+
         # POST-activation data (layer output)
         'activation_vector': activation_vector,
         'binary_pattern': binary_pattern,
@@ -162,16 +171,19 @@ def create_activation_record(checkpoint_step: str,
         'activation_norm': activation_norm,
         'n_active_neurons': n_active_neurons,
         'cett_threshold': cett_threshold,
-        
+
+        # MLP input: residual stream entering MLP (H-dim).
+        # This is the correct vector for Euclidean distance in polytope density.
+        'mlp_input_vector': mlp_input_vector if mlp_input_vector is not None else activation_vector,
+
         # Spline code from pre-activation (main binary pattern for analysis)
         'spline_code': spline_code,
-        
+
         'metadata': kwargs
     }
-    
-    # Add pre-activation analysis if available
+
     record.update(pre_activation_analysis)
-    
+
     return record
 
 def organize_records_by_key(records: List[Dict[str, Any]], key: str) -> Dict[Any, List[Dict[str, Any]]]:
@@ -443,34 +455,30 @@ def extract_layer_activations(model: LanguageModel,
                             token_ids: List[int],
                             layer: int,
                             position: int = -1,
-                            strategy: str = "single") -> Tuple[np.ndarray, np.ndarray]:
+                            strategy: str = "single") -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
-    Extract BOTH pre-activation and post-activation vectors from MLP modules
-    
+    Extract pre-activation, post-activation, and MLP input vectors from a layer.
+
     Args:
         model: nnsight LanguageModel
         token_ids: Pre-tokenized input token IDs
         layer: Layer index
         position: Token position (-1 for last token)
         strategy: Extraction strategy ('single', 'last', 'mean')
-                 - 'single': Use specific position
-                 - 'last': Always use last token
-                 - 'mean': Average across all tokens
-        
+
     Returns:
-        Tuple (post_activation_vector, pre_activation_vector):
+        Tuple (post_activation_vector, pre_activation_vector, mlp_input_vector):
             - post_activation_vector: Layer output (after activation function + residual)
             - pre_activation_vector: MLP intermediate output (before activation function)
+            - mlp_input_vector: Residual stream entering the MLP (H-dim input space).
+              This is the correct vector for Euclidean distance in polytope density.
     """
     try:
-        # Set pad token if not set
         if model.tokenizer.pad_token is None:
             model.tokenizer.pad_token = model.tokenizer.eos_token
 
-        # Always construct inputs on CPU to avoid meta device issues
         inputs = {"input_ids": torch.tensor([token_ids], device="cuda")}
 
-        # Run trace and register tensors to be saved
         with model.trace(inputs):
             _ = model(**inputs)
 
@@ -479,15 +487,31 @@ def extract_layer_activations(model: LanguageModel,
             # Save full hidden state for this layer (batch, seq, hidden)
             hidden_handle = model_layers[layer].output.save()
 
-            # Try to locate and save the MLP pre-activation tensor as a handle
-            pre_handle = None
-
+            # --- MLP input: the residual stream entering the MLP ---
+            # This is the H-dim vector the MLP sees as input, i.e. the correct
+            # space for Euclidean distance in polytope density (per Humayun et al.)
+            mlp_input_handle = None
             mlp_paths = [
                 'mlp',
                 'feed_forward',
                 'ff',
                 'mlp_1'
             ]
+            for mlp_path in mlp_paths:
+                mlp_module = getattr(model_layers[layer], mlp_path, None)
+                if mlp_module is not None:
+                    try:
+                        mlp_input_handle = mlp_module.input.save()
+                        break
+                    except Exception:
+                        continue
+
+            if mlp_input_handle is None:
+                print(f"WARNING: Could not capture MLP input for layer {layer}. "
+                      "Falling back to layer output for Euclidean distance.")
+
+            # --- MLP pre-activation: output of up-projection (for spline codes) ---
+            pre_handle = None
 
             intermediate_names = [
                 'dense_h_to_4h',
@@ -506,7 +530,6 @@ def extract_layer_activations(model: LanguageModel,
                     for intermediate_name in intermediate_names:
                         if hasattr(mlp_module, intermediate_name):
                             intermediate_layer = getattr(mlp_module, intermediate_name)
-                            # Save the full pre-activation tensor; slicing will be done after .value is available
                             pre_handle = intermediate_layer.output.save()
                             found_preactivation = True
                             break
@@ -524,7 +547,6 @@ def extract_layer_activations(model: LanguageModel,
                             if hasattr(mlp_module, act_name):
                                 act_fn = getattr(mlp_module, act_name)
                                 if hasattr(act_fn, 'input') and act_fn.input is not None:
-                                    # Save the activation input (pre-activation); act_fn.input is a tuple
                                     pre_handle = act_fn.input[0].save()
                                     found_preactivation = True
                                     break
@@ -536,47 +558,60 @@ def extract_layer_activations(model: LanguageModel,
             if not found_preactivation:
                 print(f"WARNING: Could not find MLP preactivation for layer {layer}. Spline codes will not be available.")
                 pre_handle = None
-                
-        # Materialize saved tensors and normalize shapes
-        hidden_val = getattr(hidden_handle, 'value', hidden_handle)
-        if isinstance(hidden_val, (tuple, list)):
-            hidden_tensor = hidden_val[0]
-        else:
-            hidden_tensor = hidden_val
 
-        pre_tensor = None
-        if pre_handle is not None:
-            pre_val = getattr(pre_handle, 'value', pre_handle)
-            if isinstance(pre_val, (tuple, list)):
-                pre_tensor = pre_val[0]
-            else:
-                pre_tensor = pre_val
+        # --- Materialize saved tensors ---
+        def _materialize(handle):
+            if handle is None:
+                return None
+            val = getattr(handle, 'value', handle)
+            if isinstance(val, (tuple, list)):
+                return val[0]
+            return val
+
+        hidden_tensor = _materialize(hidden_handle)
+        pre_tensor = _materialize(pre_handle)
+        mlp_input_tensor = _materialize(mlp_input_handle)
+
+        # Handle MLP input which may come as tuple (input,) from module.input
+        if mlp_input_tensor is not None and isinstance(mlp_input_tensor, (tuple, list)):
+            mlp_input_tensor = mlp_input_tensor[0]
 
         # Ensure tensors are 3D: (batch, seq, hidden)
+        for t_name in ['hidden_tensor', 'pre_tensor', 'mlp_input_tensor']:
+            t = locals()[t_name]
+            if t is not None and t.dim() == 2:
+                locals()[t_name] = t.unsqueeze(0)
+        # Re-read after potential unsqueeze
         if hidden_tensor.dim() == 2:
             hidden_tensor = hidden_tensor.unsqueeze(0)
         if pre_tensor is not None and pre_tensor.dim() == 2:
             pre_tensor = pre_tensor.unsqueeze(0)
+        if mlp_input_tensor is not None and mlp_input_tensor.dim() == 2:
+            mlp_input_tensor = mlp_input_tensor.unsqueeze(0)
 
         # Select vectors based on strategy
-        if strategy == "mean":
-            post_act = hidden_tensor[0, :, :].mean(dim=0)
-            pre_act = pre_tensor[0, :, :].mean(dim=0) if pre_tensor is not None else None
-        elif strategy == "last" or position == -1:
-            post_act = hidden_tensor[0, -1, :]
-            pre_act = pre_tensor[0, -1, :] if pre_tensor is not None else None
-        else:
-            if position >= hidden_tensor.shape[1]:
-                position = hidden_tensor.shape[1] - 1
-            post_act = hidden_tensor[0, position, :]
-            pre_act = pre_tensor[0, position, :] if pre_tensor is not None else None
+        def _select_position(tensor, pos, strat):
+            if tensor is None:
+                return None
+            if strat == "mean":
+                return tensor[0, :, :].mean(dim=0)
+            elif strat == "last" or pos == -1:
+                return tensor[0, -1, :]
+            else:
+                p = min(pos, tensor.shape[1] - 1)
+                return tensor[0, p, :]
+
+        post_act = _select_position(hidden_tensor, position, strategy)
+        pre_act = _select_position(pre_tensor, position, strategy)
+        mlp_input = _select_position(mlp_input_tensor, position, strategy)
 
         # Convert to numpy
         post_act_np = post_act.detach().cpu().numpy()
         pre_act_np = pre_act.detach().cpu().numpy() if pre_act is not None else None
-        
-        return post_act_np, pre_act_np
-        
+        mlp_input_np = mlp_input.detach().cpu().numpy() if mlp_input is not None else None
+
+        return post_act_np, pre_act_np, mlp_input_np
+
     except Exception as e:
         raise RuntimeError(f"Failed to extract activations from layer {layer}: {str(e)}. " +
                          "Cannot proceed without valid activation data.")
@@ -622,12 +657,12 @@ def extract_activations_for_sample(model: LanguageModel,
                 # Detect activation function type for this layer
                 activation_type = _detect_activation_function(model, layer)
                 
-                # Extract both post and pre activation vectors
-                post_activation_vector, pre_activation_vector = extract_layer_activations(
-                    model, token_ids_sentence, layer, 
+                # Extract post-activation, pre-activation, and MLP input vectors
+                post_activation_vector, pre_activation_vector, mlp_input_vector = extract_layer_activations(
+                    model, token_ids_sentence, layer,
                     activation_target_idx, activation_strategy
                 )
-                
+
                 if len(post_activation_vector) > 0:
                     record = create_activation_record(
                         checkpoint_step=checkpoint,
@@ -641,7 +676,9 @@ def extract_activations_for_sample(model: LanguageModel,
                         phrase_end_idx=phrase_end_idx,
                         activation_vector=post_activation_vector,
                         pre_activation_vector=pre_activation_vector,
+                        mlp_input_vector=mlp_input_vector,
                         activation_type=activation_type,
+                        pair_id=sample.get('pair_id'),
                         model_name=model_name
                     )
                     records.append(record)

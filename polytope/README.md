@@ -92,7 +92,7 @@ from polytope.visualization_utils import create_visualizations_from_json
 # Generate PDF figures for papers
 create_visualizations_from_json(
     json_path="results/polytope_analysis_results.json",
-    output_dir="paper_figures",
+    output_dir="neurips-2026/figures/main",
     output_format="pdf"  # or "png"
 )
 ```
@@ -216,7 +216,7 @@ from polytope.visualization_utils import create_visualizations_from_json
 
 create_visualizations_from_json(
     json_path=f"{results_dir}/polytope_analysis_results.json",
-    output_dir="paper_figures",
+    output_dir="neurips-2026/figures/main",
     output_format="pdf"
 )
 ```

@@ -147,7 +147,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+**/k8s/
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -187,3 +187,8 @@ cython_debug/
 # Ignore generated caches and analysis outputs
 cache/
 
+*.csv
+*.json
+*.pdf
+*.png
+results/

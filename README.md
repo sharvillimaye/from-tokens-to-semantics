@@ -46,11 +46,19 @@ pip install -e .
 ## Project Structure
 
 ```
-team-aasa/
-├── neuron_embeddings/          # Neuron activation analysis
-├── jsd_polysemanticity/        # JSD and polysemanticity pipeline
-├── polytope/                   # Polytope analysis tools
-├── ngrams/                     # N-gram processing and analysis
+from-tokens-to-semantics/
+├── scripts/
+│   ├── metrics/                # Main metric/computation pipelines
+│   ├── interventions/          # Ablation and causal intervention scripts
+│   ├── plots/                  # Plotting and figure-generation scripts
+│   └── cluster/                # Cluster-side helper scripts
+├── polytope/                   # Polytope analysis package
+├── neuron_embeddings/          # Legacy neuron embedding pipeline
+├── jsd_polysemanticity/        # Legacy JSD pipeline and controls
+├── ngrams/                     # N-gram processing and indexing
+├── datasets/                   # Curated synonym-pair datasets
+├── neurips-2026/               # Paper workspace: manuscript, notes, figures, tables
+├── k8s/                        # Cluster job specs
 ├── tests/                      # Test suite
 └── pyproject.toml              # Project configuration and dependencies
 ```
@@ -66,13 +74,12 @@ team-aasa/
 
 ## Usage Examples
 
-### Running the JSD Pipeline
+### Running a Script Entry Point
 
-```python
-from jsd_polysemanticity.pipeline import main
-
-# Run the main analysis pipeline
-main()
+```bash
+python -m scripts.metrics.coverage_affinity_experiment --help
+python -m scripts.interventions.targeted_ablation --help
+python -m scripts.plots.paper_figures --help
 ```
 
 ## Polytope Module

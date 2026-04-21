@@ -170,7 +170,7 @@ This directory contains publication-ready figures in {self.output_format.upper()
 1. **Upload to Overleaf**: 
    - Zip all .{self.output_format} files
    - Upload to your Overleaf project
-   - Extract in the main directory or a `figures/` subdirectory
+   - Extract in the main directory or a `neurips-2026/figures/main/` subdirectory
 
 2. **LaTeX Inclusion**:
    ```latex

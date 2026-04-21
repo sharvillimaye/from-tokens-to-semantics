@@ -51,6 +51,7 @@ dependencies = [
 [tool.ruff]
 line-length = 99
 src = [
+  "scripts",
   "ngrams",
   "polytope",
   "neuron_embeddings",
@@ -58,6 +59,7 @@ src = [
 ]
 include = [
   "pyproject.toml",
+  "scripts/**/*.py",
   "ngrams/**/*.py",
   "polytope/**/*.py",
   "neuron_embeddings/**/*.py",
@@ -70,6 +72,7 @@ extend-select = ["I"]  # Add import sorting
 
 [tool.ruff.lint.isort]
 known-first-party = [
+  "scripts",
   "ngrams",
   "polytope",
   "neuron_embeddings",
@@ -79,6 +82,8 @@ force-sort-within-sections = true
 
 [tool.setuptools.packages.find]
 include = [
+  "scripts",
+  "scripts.*",
   "ngrams",
   "ngrams.*",
   "polytope",
@@ -88,4 +93,3 @@ include = [
   "jsd_polysemanticity",
   "jsd_polysemanticity.*"
 ]
-
