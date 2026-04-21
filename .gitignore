@@ -189,3 +189,6 @@ cache/
 
 *.csv
 *.json
+*.pdf
+*.png
+results/
